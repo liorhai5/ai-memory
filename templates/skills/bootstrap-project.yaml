@@ -1,0 +1,30 @@
+name: bootstrap-project
+description: Initialize ai-memory in the current project
+
+requires:
+  - file management
+
+recipe: |
+  Create the ai-memory directory structure for this project:
+
+  1. Create directory: ai-memory/design-logs/
+  2. Create directory: ai-memory/skills/ (empty, for project-specific skills)
+  3. Create file: ai-memory/MEMORY.md with these sections:
+
+  ```markdown
+  # Project Memory
+
+  ## Decisions
+  <!-- Key technical and architectural decisions -->
+
+  ## Patterns
+  <!-- Patterns and conventions used in this project -->
+
+  ## Learnings
+  <!-- What we've learned working on this project -->
+
+  ## Context
+  <!-- Important context about this project -->
+  ```
+
+  4. Confirm: "Project memory initialized. Ready to use."
