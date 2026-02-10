@@ -1,0 +1,62 @@
+name: refactor
+description: Safe refactoring workflow with verification at each step
+
+requires:
+  - file management
+  - code search (optional)
+
+parameters:
+  target:
+    type: string
+    required: true
+    description: What to refactor — file, function, module, or pattern
+  goal:
+    type: string
+    required: true
+    description: Why refactor — what improvement are we making?
+
+tracking: ai-memory/design-logs/NNN-refactor-{{target}}.md
+
+phases:
+  analyze:
+    prompt: |
+      Analyze the refactoring target: {{target}}
+      Goal: {{goal}}
+
+      1. Read the current code and understand its structure
+      2. Identify all usages/callers/dependents
+      3. List what needs to change and what should stay the same
+      4. Check ai-memory/MEMORY.md for relevant project conventions
+      5. Document the plan in the tracking file:
+         - Current state (what exists)
+         - Desired state (what we want)
+         - Steps to get there (ordered, incremental)
+         - Risk areas (what could break)
+    gate: true
+    next: refactor
+
+  refactor:
+    prompt: |
+      Execute the approved refactoring plan step by step.
+      After EACH step:
+      - Verify the code still compiles/works
+      - Run relevant tests if they exist
+      - Commit logically (one concept per change)
+      Do NOT combine multiple refactoring steps.
+    next: verify
+
+  verify:
+    prompt: |
+      Verify the refactoring:
+      - All tests pass
+      - No functionality changed (unless intended)
+      - Code is cleaner/better per the stated goal
+      - No leftover TODOs or temporary code
+      Update the tracking file with results.
+    on_fail: refactor
+    next: complete
+
+  complete:
+    prompt: |
+      Mark the tracking file as implemented.
+      Update ai-memory/MEMORY.md if new patterns were established.

@@ -1,0 +1,53 @@
+name: code-review
+description: Structured code review with systematic analysis
+
+requires:
+  - file management
+  - git operations (optional)
+
+parameters:
+  target:
+    type: string
+    required: true
+    description: What to review — file path, PR number, or branch name
+
+recipe: |
+  Perform a structured code review of: {{target}}
+
+  ## Step 1: Understand
+  - Read the code/diff being reviewed
+  - Understand the intent — what problem is this solving?
+  - Check ai-memory/MEMORY.md for relevant project conventions
+
+  ## Step 2: Analyze
+  Review from these perspectives:
+
+  **Correctness:**
+  - Does it do what it claims? Edge cases handled?
+  - Error handling present and appropriate?
+
+  **Design:**
+  - Clean abstractions? Single responsibility?
+  - Dependencies reasonable? Could be simpler?
+
+  **Conventions:**
+  - Follows project patterns? Naming consistent?
+  - Tests present for new behavior?
+
+  **Performance:**
+  - Any obvious bottlenecks? N+1 queries? Unnecessary work?
+
+  ## Step 3: Report
+  Format findings as:
+
+  ### 🔴 Must Fix
+  Critical issues that should be addressed before merge.
+
+  ### 🟡 Suggestions
+  Improvements that would make the code better but aren't blocking.
+
+  ### 🟢 Good
+  Things done well — positive reinforcement matters.
+
+  ### Summary
+  One-paragraph overall assessment.
