@@ -91,10 +91,11 @@ Memory files are edited, not just appended. The human (or AI, with guidance) pru
 
 ### 6. Convention over configuration
 - Machine memory: `~/.ai-memory/`
-- Project memory: `ai-memory/`
+- Local project workflow memory: `ai-memory/`
+- Project committed knowledge paths are project-owned and can vary
 - Design logs: `NNN-semantic-name.md`
 - Skills: `name.yaml` with `recipe:` or `phases:`
-- No config files. The conventions ARE the configuration.
+- ai-memory conventions stay fixed; project-specific committed knowledge behavior belongs in project `.cursor/rules/*.mdc`
 
 ## What Success Looks Like
 
@@ -111,6 +112,8 @@ Memory files are edited, not just appended. The human (or AI, with guidance) pru
 |------|------|-------------------------|
 | **Cursor** | IDE with LLM | Primary consumer of memory. Reads/writes all files. |
 | **Wix MCP-S** | External tools (Jira, Slack, etc.) | Used directly via Cursor. ai-memory doesn't wrap them. |
-| **Git** | Version control | ai-memory files live in git repos. Memory is versioned. |
+| **Git** | Version control | `~/.ai-memory/` is local; local `ai-memory/` is gitignored by default; committed project knowledge remains in repo-owned paths. |
+| **Project `.cursor/rules`** | Project-level guidance | Owns committed project knowledge behavior and file references. |
+| **ai-gh-pipeline** | CI/project knowledge system | Self-contained project layer. ai-memory does not manage its internal paths. |
 | **ai-memory CLI** | File manager | Creates and manages `~/.ai-memory/`. No LLM. |
 | **companion** | Previous CLI assistant | On pause. Code preserved in `ai-lior-claw/companion/`. |

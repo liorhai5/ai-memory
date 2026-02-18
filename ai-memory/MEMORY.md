@@ -8,6 +8,7 @@
 - No INDEX.md for design logs — numbered files (`NNN-name.md`) are self-indexing
 - Markdown everywhere — no JSON, no databases
 - Companion project (ai-lior-claw) is on pause, separate repo — not archived, not merged
+- **022**: ai-memory is a local workflow layer, not project knowledge discovery. Keep fixed paths for personal workflow (`ai-memory/MEMORY.md`, `ai-memory/design-logs/`) and keep skills machine-level only (`~/.ai-memory/skills/`). Project committed knowledge stays self-contained and is defined by project `.cursor/rules/*.mdc`
 
 ## Patterns
 - Structured design: break complex topics into numbered decisions, approve one by one (dogfooded in 001)
@@ -26,3 +27,4 @@
 - Evolved from three projects: ai-conductor (state machine), companion/ai-lior-claw (CLI assistant), Wix MCP-S (workplace tools)
 - 9 starter skills ship with init: design-first, bootstrap-project, code-review, investigate, refactor, daily-digest, prep-1on1, weekly-digest, research-topic
 - The design log `001-unified-machine-memory.md` documents the full evolution and all 8 topic decisions
+- `022-project-knowledge-generalization.md` — finalized as local ai-memory workflow + self-contained ai-gh/project knowledge separation. Updated global rule, templates, and docs accordingly

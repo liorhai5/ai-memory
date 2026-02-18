@@ -15,13 +15,13 @@ Two memory files exist. Know the difference:
   Cross-project knowledge: preferences, people, universal principles.
   Update when: personal preferences, team observations, learnings that apply everywhere.
 
-Before starting work: read PROJECT memory + check design-logs/
+Before starting work: read PROJECT memory + check ai-memory/design-logs/
 After significant work: update the correct memory file. Do not skip this.
 
 Knowledge files: ~/.ai-memory/data/ (read specific files when relevant)
 
 ## Workflow
-1. Read before write — check ai-memory/ for existing context
+1. Read before write — check memory and design logs for existing context
 2. Design before implement — no code without approved design log
 3. Questions in document — Socratic method (Q&A section in design log)
 4. Approval before coding — human must approve design
@@ -34,5 +34,4 @@ Sections: Problem Statement → Q&A → Design → Verification → Results → 
 
 ## Skills
 Shared: ~/.ai-memory/skills/*.yaml
-Project: ai-memory/skills/*.yaml (overrides shared)
 When asked to follow a skill, read the YAML and follow its recipe/phases.
