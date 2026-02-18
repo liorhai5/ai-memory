@@ -18,6 +18,7 @@ recipe: |
   - Read the code/diff being reviewed
   - Understand the intent — what problem is this solving?
   - Check ai-memory/MEMORY.md for relevant project conventions
+  - If project-specific rules exist in .cursor/rules/, include them as additional context
 
   ## Step 2: Analyze
   Review from these perspectives:
