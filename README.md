@@ -5,7 +5,8 @@ Persistent, shared context layer for AI-assisted development. Works with Cursor 
 ## What It Does
 
 - **Shared memory** (`~/.ai-memory/`) — your identity, cross-project knowledge, reusable skills
-- **Project memory** (`ai-memory/`) — per-project decisions, design logs, project-specific skills
+- **Local project workflow memory** (`ai-memory/`) — per-project local decisions and design logs
+- **Project-owned committed knowledge** (for example `knowledge/`, `docs/`) — defined by each project's own rules
 - **Global Cursor rule** — tells the LLM how to read/write memory and follow the design-first workflow
 
 Every AI conversation starts with context and ends by updating memory. No more repeating yourself.
@@ -69,8 +70,11 @@ your-project/
 └── ai-memory/
     ├── MEMORY.md           # Project decisions, patterns, learnings
     ├── design-logs/        # Design log files (NNN-name.md)
-    └── skills/             # Optional project-specific skills
 ```
+
+By default this `ai-memory/` folder is local workflow context and should be gitignored.
+If you want to persist/share specific outputs, move them to the project's committed
+knowledge area and define behavior in project `.cursor/rules/*.mdc`.
 
 ### Design-First Workflow
 
@@ -95,7 +99,7 @@ ai-memory skill list           List shared skills
 ai-memory skill add <file>     Copy a skill YAML to skills/
 ```
 
-The CLI manages only `~/.ai-memory/` (machine level). Project-level `ai-memory/` is managed by Cursor.
+The CLI manages only `~/.ai-memory/` (machine level). Local project `ai-memory/` is managed by Cursor.
 
 ## Included Skills
 
@@ -136,13 +140,15 @@ ai-memory/                          # This repo
 | Level | Location | Who writes | What's in it |
 |-------|----------|-----------|--------------|
 | **Shared** | `~/.ai-memory/` | CLI + Cursor | Identity, cross-project knowledge, shared skills |
-| **Project** | `ai-memory/` | Cursor | Project decisions, design logs, project skills |
+| **Local project workflow** | `ai-memory/` | Cursor | Local project decisions and design logs |
+| **Project committed knowledge** | project-defined (for example `knowledge/`, `docs/`) | Team + project tooling | Shared project context for repo/CI |
 
 The Cursor global rule tells the LLM:
 - Read `SOUL.md` at conversation start
-- Check project memory before starting work
+- Check local project memory before starting work
 - Update the correct memory file after significant work
 - Follow skills when asked
+- Use project `.cursor/rules/*.mdc` when committed project knowledge context is needed
 
 ## Design Principles
 
