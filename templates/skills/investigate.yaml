@@ -18,6 +18,7 @@ recipe: |
   ## Step 1: Gather Context
   - Read any error messages, stack traces, or logs
   - Check ai-memory/MEMORY.md for related known issues or patterns
+  - If project-specific rules exist in .cursor/rules/, include them as additional context
   - Identify the affected component/area of code
 
   ## Step 2: Form Hypotheses

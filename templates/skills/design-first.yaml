@@ -20,9 +20,10 @@ phases:
       Research context for: {{feature}}
       1. Read ai-memory/MEMORY.md for relevant project context
       2. Check existing design logs for related work
-      3. Create the tracking file with Problem Statement
+      3. If project-specific rules exist in .cursor/rules/, include them as additional context
+      4. Create the tracking file with Problem Statement
          (replace NNN with next available number from design-logs/)
-      4. Add Questions & Answers section — use Socratic method
+      5. Add Questions & Answers section — use Socratic method
          Ask yourself hard questions, answer them thoroughly
     next: design
 

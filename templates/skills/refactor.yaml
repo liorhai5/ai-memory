@@ -27,7 +27,8 @@ phases:
       2. Identify all usages/callers/dependents
       3. List what needs to change and what should stay the same
       4. Check ai-memory/MEMORY.md for relevant project conventions
-      5. Document the plan in the tracking file:
+      5. If project-specific rules exist in .cursor/rules/, include them as additional context
+      6. Document the plan in the tracking file:
          - Current state (what exists)
          - Desired state (what we want)
          - Steps to get there (ordered, incremental)
