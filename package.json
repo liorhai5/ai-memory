@@ -1,0 +1,48 @@
+{
+  "name": "ai-memory",
+  "version": "0.1.0",
+  "description": "Personal, persistent, self-learning memory for AI coding assistants",
+  "type": "module",
+  "license": "ISC",
+  "author": "Lior Hai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liorha/ai-memory"
+  },
+  "keywords": [
+    "ai",
+    "memory",
+    "llm",
+    "cursor",
+    "claude-code",
+    "mcp",
+    "cli",
+    "developer-tools"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "ai-memory": "dist/cli.js"
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "echo 'no linter configured for TS yet'"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.0",
+    "better-sqlite3": "^11.10.0",
+    "commander": "^14.0.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.15.21",
+    "tsx": "^4.20.6",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
