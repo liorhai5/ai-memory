@@ -4,39 +4,48 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateInitConfig } from '../../src/hooks/init-config.js';
 
-describe('Init Config (generateInitConfig)', () => {
-  test('83 init.cursor-hooks-config', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-init-83-'));
-    const filePath = join(dir, 'hooks.json');
-    generateInitConfig({ ide: 'cursor', filePath });
-    const json = JSON.parse(readFileSync(filePath, 'utf8'));
-    // D25: Cursor format { version: 1, hooks: { sessionStart: [{ command: "..." }] } }
-    expect(json).toHaveProperty('version', 1);
-    expect(json.hooks).toHaveProperty('sessionStart');
-    expect(json.hooks).toHaveProperty('stop');
-    expect(json.hooks).toHaveProperty('sessionEnd');
-    expect(json.hooks.sessionStart[0]).toHaveProperty('command');
+function readJson(path: string): any {
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function hasGroupedCommand(entries: any, command: string, matcher?: string): boolean {
+  if (!Array.isArray(entries)) return false;
+  return entries.some((group: any) => {
+    if (!group || typeof group !== 'object') return false;
+    if (typeof matcher !== 'undefined' && group.matcher !== matcher) return false;
+    if (!Array.isArray(group.hooks)) return false;
+    return group.hooks.some((hook: any) => hook?.type === 'command' && hook?.command === command);
+  });
+}
+
+describe('generateInitConfig (Claude Code hooks schema)', () => {
+  test('writes matcher-group hook format for Claude Code', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-init-config-claude-'));
+    const settingsPath = join(home, '.claude', 'settings.json');
+    generateInitConfig({ ide: 'claude-code', filePath: settingsPath });
+
+    const json = readJson(settingsPath);
+    expect(hasGroupedCommand(json.hooks?.SessionStart, 'ai-memory hook session-start --ide claude-code', 'startup|resume|clear|compact')).toBe(true);
+    expect(hasGroupedCommand(json.hooks?.UserPromptSubmit, 'ai-memory hook prompt-submit --ide claude-code')).toBe(true);
+    expect(hasGroupedCommand(json.hooks?.Stop, 'ai-memory hook stop --ide claude-code')).toBe(true);
+    expect(hasGroupedCommand(json.hooks?.SessionEnd, 'ai-memory hook session-end --ide claude-code')).toBe(true);
+    expect(json.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
   });
 
-  test('84 init.claude-code-config', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-init-84-'));
-    const filePath = join(dir, 'settings.json');
-    generateInitConfig({ ide: 'claude-code', filePath });
-    const json = JSON.parse(readFileSync(filePath, 'utf8'));
-    // D25: Claude Code format { hooks: { SessionStart: [{ type: "command", command: "..." }] } }
-    expect(json.hooks).toHaveProperty('SessionStart');
-    expect(json.hooks).toHaveProperty('Stop');
-    expect(json.hooks).toHaveProperty('SessionEnd');
-    expect(json.hooks.SessionStart[0]).toHaveProperty('type', 'command');
-    expect(json.hooks.SessionStart[0]).toHaveProperty('command');
-  });
+  test('is idempotent and does not duplicate Claude hook commands', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-init-config-claude-idempotent-'));
+    const settingsPath = join(home, '.claude', 'settings.json');
+    generateInitConfig({ ide: 'claude-code', filePath: settingsPath });
+    generateInitConfig({ ide: 'claude-code', filePath: settingsPath });
 
-  test('85 init.idempotent', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-init-85-'));
-    const filePath = join(dir, 'hooks.json');
-    generateInitConfig({ ide: 'cursor', filePath });
-    generateInitConfig({ ide: 'cursor', filePath });
-    const json = JSON.parse(readFileSync(filePath, 'utf8'));
-    expect(json.hooks.sessionStart.length).toBe(1);
+    const json = readJson(settingsPath);
+    const cmd = 'ai-memory hook prompt-submit --ide claude-code';
+    const groups = (json.hooks?.UserPromptSubmit ?? []) as any[];
+    let count = 0;
+    for (const group of groups) {
+      if (!Array.isArray(group?.hooks)) continue;
+      count += group.hooks.filter((hook: any) => hook?.command === cmd).length;
+    }
+    expect(count).toBe(1);
   });
 });

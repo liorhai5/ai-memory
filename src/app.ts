@@ -1,58 +1,42 @@
 import type Database from 'better-sqlite3';
 import { createDb, getDbPath } from './db/connection.js';
-import { CaptureStore } from './stores/capture-store.js';
-import { LinkStore } from './stores/link-store.js';
-import { MemoryStore } from './stores/memory-store.js';
-import { SessionStore } from './stores/session-store.js';
-import { CaptureService } from './services/capture-service.js';
-import { DeterministicClassifier } from './services/deterministic-classifier.js';
-import { HebbianMatcher } from './services/hebbian-matcher.js';
-import { MaintenanceService } from './services/maintenance-service.js';
-import { MigrationService } from './services/migration-service.js';
-import { RetrievalService } from './services/retrieval-service.js';
-import { ScoringService } from './services/scoring-service.js';
+import { ConversationStore } from './stores/conversation-store.js';
+import { SearchService } from './services/search-service.js';
+import { InjectionService } from './services/injection-service.js';
+import { ImportService } from './services/import-service.js';
+import { StatusService } from './services/status-service.js';
+import { UsageService } from './services/usage-service.js';
+import { type AiMemoryConfig, loadConfig } from './services/config-service.js';
 
 export interface AppContext {
   db: Database.Database;
-  captureStore: CaptureStore;
-  memoryStore: MemoryStore;
-  linkStore: LinkStore;
-  sessionStore: SessionStore;
-  scoringService: ScoringService;
-  retrievalService: RetrievalService;
-  hebbianMatcher: HebbianMatcher;
-  maintenanceService: MaintenanceService;
-  captureService: CaptureService;
-  migrationService: MigrationService;
-  classifier: DeterministicClassifier;
+  config: AiMemoryConfig;
+  conversationStore: ConversationStore;
+  searchService: SearchService;
+  injectionService: InjectionService;
+  importService: ImportService;
+  statusService: StatusService;
+  usageService: UsageService;
 }
 
-export function createApp(dbPath = getDbPath()): AppContext {
+export function createApp(dbPath = getDbPath(), configPath?: string): AppContext {
   const db = createDb(dbPath);
-  const captureStore = new CaptureStore(db);
-  const memoryStore = new MemoryStore(db);
-  const linkStore = new LinkStore(db);
-  const sessionStore = new SessionStore(db);
-  const scoringService = new ScoringService();
-  const retrievalService = new RetrievalService(memoryStore, captureStore, linkStore);
-  const hebbianMatcher = new HebbianMatcher(memoryStore, linkStore, captureStore, sessionStore, scoringService);
-  const maintenanceService = new MaintenanceService(db, memoryStore, scoringService);
-  const captureService = new CaptureService(captureStore, sessionStore);
-  const migrationService = new MigrationService(hebbianMatcher);
-  const classifier = new DeterministicClassifier();
+  const config = loadConfig(configPath);
+  const conversationStore = new ConversationStore(db, config.injection_max_title_chars);
+  const searchService = new SearchService(db, config);
+  const injectionService = new InjectionService(conversationStore, config);
+  const importService = new ImportService(conversationStore);
+  const statusService = new StatusService(db, dbPath);
+  const usageService = new UsageService(db);
 
   return {
     db,
-    captureStore,
-    memoryStore,
-    linkStore,
-    sessionStore,
-    scoringService,
-    retrievalService,
-    hebbianMatcher,
-    maintenanceService,
-    captureService,
-    migrationService,
-    classifier
+    config,
+    conversationStore,
+    searchService,
+    injectionService,
+    importService,
+    statusService,
+    usageService
   };
 }

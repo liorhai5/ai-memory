@@ -1,6 +1,19 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+function hasCursorCommand(entries: any, cmd: string): boolean {
+  return Array.isArray(entries) && entries.some((e: any) => e?.command === cmd);
+}
+
+function hasClaudeGroupedCommand(entries: any, cmd: string): boolean {
+  if (!Array.isArray(entries)) return false;
+  return entries.some((group: any) => {
+    if (!group || typeof group !== 'object') return false;
+    if (!Array.isArray(group.hooks)) return false;
+    return group.hooks.some((hook: any) => hook?.command === cmd);
+  });
+}
+
 export function generateInitConfig(input: { ide: 'cursor' | 'claude-code'; filePath: string; mcpFilePath?: string }): { updated: boolean } {
   const dir = dirname(input.filePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -16,17 +29,26 @@ export function generateInitConfig(input: { ide: 'cursor' | 'claude-code'; fileP
     // D25: Cursor format — { version: 1, hooks: { sessionStart: [{ command: "..." }], ... } }
     data.version ??= 1;
     data.hooks ??= {};
+    data.hooks.beforeSubmitPrompt ??= [];
     data.hooks.sessionStart ??= [];
     data.hooks.stop ??= [];
+    data.hooks.afterAgentResponse ??= [];
     data.hooks.sessionEnd ??= [];
     const cursorCmd = (name: string) => `ai-memory hook ${name} --ide cursor`;
-    if (!data.hooks.sessionStart.some((e: any) => e.command === cursorCmd('session-start'))) {
+    if (!hasCursorCommand(data.hooks.beforeSubmitPrompt, cursorCmd('prompt-submit'))) {
+      data.hooks.beforeSubmitPrompt.push({ command: cursorCmd('prompt-submit') });
+    }
+    if (!hasCursorCommand(data.hooks.sessionStart, cursorCmd('session-start'))) {
       data.hooks.sessionStart.push({ command: cursorCmd('session-start') });
     }
-    if (!data.hooks.stop.some((e: any) => e.command === cursorCmd('stop'))) {
+    if (!hasCursorCommand(data.hooks.stop, cursorCmd('stop'))) {
       data.hooks.stop.push({ command: cursorCmd('stop') });
     }
-    if (!data.hooks.sessionEnd.some((e: any) => e.command === cursorCmd('session-end'))) {
+    // D038 D1: afterAgentResponse captures assistant content (Cursor sends stdin.text)
+    if (!hasCursorCommand(data.hooks.afterAgentResponse, cursorCmd('afterAgentResponse'))) {
+      data.hooks.afterAgentResponse.push({ command: cursorCmd('afterAgentResponse') });
+    }
+    if (!hasCursorCommand(data.hooks.sessionEnd, cursorCmd('session-end'))) {
       data.hooks.sessionEnd.push({ command: cursorCmd('session-end') });
     }
 
@@ -45,20 +67,35 @@ export function generateInitConfig(input: { ide: 'cursor' | 'claude-code'; fileP
       writeFileSync(input.mcpFilePath, JSON.stringify(mcpData, null, 2));
     }
   } else {
-    // D25: Claude Code format — { hooks: { SessionStart: [{ type: "command", command: "..." }], ... } }
     data.hooks ??= {};
-    data.hooks.SessionStart ??= [];
-    data.hooks.Stop ??= [];
-    data.hooks.SessionEnd ??= [];
+    const sessionStartMatcher = 'startup|resume|clear|compact';
+    const isOldFormatAiMemory = (e: any) =>
+      e && typeof e.command === 'string' && e.command.startsWith('ai-memory') && !Array.isArray(e.hooks);
+    for (const event of ['UserPromptSubmit', 'SessionStart', 'Stop', 'SessionEnd'] as const) {
+      data.hooks[event] = (data.hooks[event] ?? []).filter((e: any) => !isOldFormatAiMemory(e));
+    }
     const ccCmd = (name: string) => `ai-memory hook ${name} --ide claude-code`;
-    if (!data.hooks.SessionStart.some((e: any) => e.command === ccCmd('session-start'))) {
-      data.hooks.SessionStart.push({ type: 'command', command: ccCmd('session-start') });
+    if (!hasClaudeGroupedCommand(data.hooks.UserPromptSubmit, ccCmd('prompt-submit'))) {
+      data.hooks.UserPromptSubmit.push({ hooks: [{ type: 'command', command: ccCmd('prompt-submit') }] });
     }
-    if (!data.hooks.Stop.some((e: any) => e.command === ccCmd('stop'))) {
-      data.hooks.Stop.push({ type: 'command', command: ccCmd('stop') });
+    if (!hasClaudeGroupedCommand(data.hooks.SessionStart, ccCmd('session-start'))) {
+      data.hooks.SessionStart.push({
+        matcher: sessionStartMatcher,
+        hooks: [{ type: 'command', command: ccCmd('session-start') }]
+      });
+    } else {
+      data.hooks.SessionStart = data.hooks.SessionStart.map((group: any) => {
+        if (!group || typeof group !== 'object' || !Array.isArray(group.hooks)) return group;
+        const hasOurCommand = group.hooks.some((hook: any) => hook?.command === ccCmd('session-start'));
+        if (!hasOurCommand) return group;
+        return { ...group, matcher: sessionStartMatcher };
+      });
     }
-    if (!data.hooks.SessionEnd.some((e: any) => e.command === ccCmd('session-end'))) {
-      data.hooks.SessionEnd.push({ type: 'command', command: ccCmd('session-end') });
+    if (!hasClaudeGroupedCommand(data.hooks.Stop, ccCmd('stop'))) {
+      data.hooks.Stop.push({ hooks: [{ type: 'command', command: ccCmd('stop') }] });
+    }
+    if (!hasClaudeGroupedCommand(data.hooks.SessionEnd, ccCmd('session-end'))) {
+      data.hooks.SessionEnd.push({ hooks: [{ type: 'command', command: ccCmd('session-end') }] });
     }
 
     // D20/006: Claude Code MCP config is in same settings.json
@@ -70,4 +107,47 @@ export function generateInitConfig(input: { ide: 'cursor' | 'claude-code'; fileP
 
   writeFileSync(input.filePath, JSON.stringify(data, null, 2));
   return { updated: true };
+}
+
+// D038 D14: Validate hooks are registered in config files
+// D038 D16: Lightweight config presence check for session-start drift detection
+export function checkHookPresence(ide: 'cursor' | 'claude-code', filePath: string): { ok: boolean; missing: string[] } {
+  const missing: string[] = [];
+  if (!existsSync(filePath)) return { ok: false, missing: [`config file missing: ${filePath}`] };
+
+  try {
+    const data = JSON.parse(readFileSync(filePath, 'utf8'));
+    if (ide === 'cursor') {
+      const cursorCmd = (name: string) => `ai-memory hook ${name} --ide cursor`;
+      const required: [string, string][] = [
+        ['beforeSubmitPrompt', cursorCmd('prompt-submit')],
+        ['sessionStart', cursorCmd('session-start')],
+        ['stop', cursorCmd('stop')],
+        ['afterAgentResponse', cursorCmd('afterAgentResponse')],
+        ['sessionEnd', cursorCmd('session-end')]
+      ];
+      for (const [event, cmd] of required) {
+        if (!hasCursorCommand(data?.hooks?.[event], cmd)) {
+          missing.push(`cursor hooks.${event}: ${cmd}`);
+        }
+      }
+    } else {
+      const ccCmd = (name: string) => `ai-memory hook ${name} --ide claude-code`;
+      const required: [string, string][] = [
+        ['UserPromptSubmit', ccCmd('prompt-submit')],
+        ['SessionStart', ccCmd('session-start')],
+        ['Stop', ccCmd('stop')],
+        ['SessionEnd', ccCmd('session-end')]
+      ];
+      for (const [event, cmd] of required) {
+        if (!hasClaudeGroupedCommand(data?.hooks?.[event], cmd)) {
+          missing.push(`claude-code hooks.${event}: ${cmd}`);
+        }
+      }
+    }
+  } catch {
+    return { ok: false, missing: [`config file parse error: ${filePath}`] };
+  }
+
+  return { ok: missing.length === 0, missing };
 }
