@@ -6,4 +6,6 @@ ai-memory/
 design-logs/
 screenshots/
 package-lock.json
-.claude/settings.local.json
+.claude/
+.codex/
+.cursor/

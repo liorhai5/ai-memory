@@ -1,4 +1,4 @@
-export type IdeType = 'cursor' | 'claude-code' | 'cli';
+export type IdeType = 'cursor' | 'claude-code' | 'codex' | 'cli';
 export type TurnRole = 'user' | 'assistant' | 'system';
 
 export interface Conversation {

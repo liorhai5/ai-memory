@@ -159,6 +159,55 @@ describe('CLI commands', () => {
     expect(existsSync(join(workspaceDir, '.ai-memory'))).toBe(false);
   });
 
+  // D039: Codex turn-complete via argv payload
+  test('turn-complete hook captures Codex conversation via argv JSON', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-codex-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
+
+    expect(runCli(['init', '--json'], env).status).toBe(0);
+
+    const payload = JSON.stringify({
+      type: 'agent-turn-complete',
+      'thread-id': 'codex-thread-1',
+      'turn-id': 'turn-1',
+      cwd: '/tmp/my-project',
+      client: 'Codex Desktop',
+      'input-messages': ['fix the login bug'],
+      'last-assistant-message': 'I found the issue in auth.ts'
+    });
+    const result = runCli(['hook', 'turn-complete', '--ide', 'codex', payload], env);
+    expect(result.status).toBe(0);
+
+    const conv = JSON.parse(runCli(['conversations', '--json'], env).stdout).conversations[0];
+    expect(conv.ide).toBe('codex');
+    expect(conv.workspace).toBe('my-project');
+    const details = JSON.parse(runCli(['conversation', conv.id, '--json'], env).stdout);
+    expect(details.turns.map((t: { role: string }) => t.role)).toEqual(['user', 'assistant']);
+    expect(details.turns[0].content).toBe('fix the login bug');
+    expect(details.turns[1].content).toBe('I found the issue in auth.ts');
+  });
+
+  // D039: System prompt filter for Codex title-generation turns
+  test('turn-complete hook filters out Codex system/title-generation turns', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-codex-filter-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
+
+    expect(runCli(['init', '--json'], env).status).toBe(0);
+
+    const systemPayload = JSON.stringify({
+      'thread-id': 'codex-sys-1',
+      cwd: '/tmp/ws',
+      'input-messages': ['You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title for a task'],
+      'last-assistant-message': '{"title":"Fix login bug"}'
+    });
+    expect(runCli(['hook', 'turn-complete', '--ide', 'codex', systemPayload], env).status).toBe(0);
+
+    const convs = JSON.parse(runCli(['conversations', '--json'], env).stdout);
+    expect(convs.conversations.length).toBe(0);
+  });
+
   test('init --ide claude-code syncs runtime MCP registry in ~/.claude.json', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-claude-registry-'));
     const dbPath = join(dir, '.ai-memory/services/memory.db');
