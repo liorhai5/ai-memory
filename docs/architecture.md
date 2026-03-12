@@ -36,10 +36,11 @@ ai-memory captures every AI conversation, makes it searchable via FTS5, and inje
 │             │ Status   │        │                                    │
 │             │ Usage    │        ▼                                    │
 │             └──────────┘ ┌──────────────────┐                       │
-│                        │     SQLite      │                          │
-│                        │ conversations   │                          │
-│                        │ turns + FTS5    │                          │
-│                        │ tool_usage      │                          │
+│                        │     SQLite       │                          │
+│                        │ conversations    │                          │
+│                        │ turns + FTS5     │                          │
+│                        │ tool_usage       │                          │
+│                        │ health_warnings  │                          │
 │                        └──────────────────┘                          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -56,7 +57,7 @@ src/
 ├── app.ts                    AppContext factory — wires DB, config, stores, services
 ├── types.ts                  Core types: Conversation, Turn, SearchParams
 ├── db/
-│   ├── schema.ts             DDL: conversations, turns, turns_fts (FTS5), tool_usage
+│   ├── schema.ts             DDL: conversations, turns, turns_fts (FTS5), tool_usage, health_warnings
 │   └── connection.ts         DB creation + column migrations
 ├── stores/
 │   └── conversation-store.ts Data access for conversations and turns
@@ -164,7 +165,7 @@ Idempotent — deduplicates conversations by `external_id`, turns by `content_ha
 
 Normalizes workspace labels and derives project keys. Key behaviors:
 
-- `normalizeWorkspaceLabel()` — strips paths to basename, removes Claude `-` prefixes, extracts project names from tokenized IDE folder names (e.g. `Users-foo-Projects-Playgrounds-bar` → `bar`)
+- `normalizeWorkspaceLabel()` — strips paths to basename, removes leading `-` prefixes from Claude folder names
 - `deriveProjectKey()` — three-tier derivation: `path:<sha1>` from absolute workspace path (most stable), `src:<token>` from IDE source path, or `ws:<label>` fallback from workspace label
 
 ---
@@ -195,18 +196,18 @@ Normalizes workspace labels and derives project keys. Key behaviors:
                              │    │ tokenize: unicode61     │
                              │    └─────────────────────────┘
 
-┌─────────────────────────┐
-│      tool_usage          │
-├─────────────────────────┤
-│ id         INTEGER PK   │
-│ tool_name  TEXT          │
-│ called_at  TEXT          │
-│ latency_ms INTEGER      │
-│ workspace  TEXT          │
-│ param_keys TEXT          │
-│ result_count INTEGER     │
-│ success    INTEGER       │
-│ error_type TEXT          │
+┌─────────────────────────┐  ┌─────────────────────────┐
+│      tool_usage          │  │    health_warnings       │
+├─────────────────────────┤  ├─────────────────────────┤
+│ id         INTEGER PK   │  │ id           INTEGER PK │
+│ tool_name  TEXT          │  │ category     TEXT       │
+│ called_at  TEXT          │  │ message      TEXT       │
+│ latency_ms INTEGER      │  │ detail       TEXT       │
+│ workspace  TEXT          │  │ first_seen_at TEXT      │
+│ param_keys TEXT          │  │ last_seen_at  TEXT      │
+│ result_count INTEGER     │  │ resolved_at   TEXT      │
+│ success    INTEGER       │  └─────────────────────────┘
+│ error_type TEXT          │  UNIQUE(category, message)
 └─────────────────────────┘
 ```
 
@@ -217,7 +218,8 @@ Normalizes workspace labels and derives project keys. Key behaviors:
 - `turns_fts` is a virtual table synced manually on each `addTurn()` call
 - Foreign key: `turns.conversation_id` → `conversations.id`
 - `project_key` is indexed — used for project-scoped queries and injection grouping
-- `(tool_name, called_at)` is indexed on `tool_usage` — used for time-windowed usage analytics
+- `(tool_name, called_at)` is indexed on `tool_usage` — used for time-windowed usage analytics. Hook invocations use `hook:<event>` naming (e.g. `hook:session-start`, `hook:stop`)
+- `(category, message)` is UNIQUE on `health_warnings` — deduplicates warnings, upsert updates `last_seen_at`
 
 ### Why SQLite + FTS5
 
@@ -232,8 +234,9 @@ Normalizes workspace labels and derives project keys. Key behaviors:
 ### 1. Capture (IDE hooks → DB)
 
 ```
-IDE hook (prompt-submit / stop)
-  → cli.ts: parse stdin, normalize fields (resolveSessionId, resolveWorkspace, etc.)
+IDE hook (prompt-submit / stop / afterAgentResponse)
+  → cli.ts: parseStdin() → parseIdeStdin(ide, raw) → typed HookPayload
+  → phantom check: skip if IDE/event mismatch
   → handlers.ts: receive resolved params
   → ConversationStore.upsertConversationByExternalId()
   → ConversationStore.addTurn()
@@ -248,8 +251,9 @@ IDE hook (prompt-submit / stop)
 
 ```
 IDE hook (session-start)
-  → cli.ts: parse stdin, normalize fields (resolveSessionId, resolveWorkspace, etc.)
-  → handlers.ts: prune empty conversations, upsert conversation
+  → cli.ts: parseStdin() → parseIdeStdin(ide, raw) → typed HookPayload
+  → phantom check: skip if IDE/event mismatch
+  → handlers.ts: prune empty conversations, upsert conversation, drift check
   → InjectionService.buildForProjectKey()
     → ConversationStore.listRecentByProjectKey() (same project first, falls back to workspace)
     → Format titles + summaries with hard char limits
@@ -295,12 +299,13 @@ The hooks adapter captures conversations and injects context via IDE lifecycle e
 
 | Handler | CLI event | Claude Code hook | Cursor hook | Action |
 |---------|-----------|-----------------|-------------|--------|
-| `sessionStartHook` | `session-start` | `SessionStart` | `sessionStart` | Prune empty conversations, upsert conversation, return injected context |
+| `sessionStartHook` | `session-start` | `SessionStart` | `sessionStart` | Prune empty conversations, upsert conversation, drift check, return injected context |
 | `beforeSubmitPromptHook` | `prompt-submit` | `UserPromptSubmit` | `beforeSubmitPrompt` | Capture user turn, auto-title on first turn |
-| `stopHook` | `stop` | `Stop` | `stop` | Capture assistant turn (guards against empty content) |
+| `stopHook` | `stop` | `Stop` | `stop` | CC: capture assistant turn from `last_assistant_message`. Cursor: metadata-only (no content capture) |
+| `stopHook` (via afterAgentResponse) | `afterAgentResponse` | N/A | `afterAgentResponse` | Cursor only: capture assistant turn from `stdin.text` |
 | `sessionEndHook` | `session-end` | `SessionEnd` | `sessionEnd` | No-op |
 
-All hooks receive `project_key` (derived from workspace path) for stable project identity across sessions.
+All hooks receive `project_key` (derived from workspace path) for stable project identity across sessions. Each hook invocation is recorded in the `tool_usage` table with `hook:<event>` naming for observability.
 
 #### Error handling
 
@@ -350,27 +355,36 @@ Multi-phase setup command. Phases run in order:
 2. **Database** — create SQLite DB (optional `--reset-db` backs up existing DB first)
 3. **Config** — write `~/.ai-memory/config.json` with defaults if missing
 4. **IDE hooks + MCP** — register hooks and MCP server for selected IDE(s)
+5. **Validation** — `checkHookPresence()` verifies registered hooks are present in config files. Reports per-IDE pass/fail. Missing hooks are recorded as `init_drift` warnings.
 
-`--ide all` auto-detects installed IDEs by checking for `~/.cursor` and `~/.claude` directories.
+`--ide all` auto-detects installed IDEs by checking for `~/.cursor` and `~/.claude` directories. Init is idempotent and self-repairing — re-running it on an existing installation detects and fixes drifted configs.
 
 For Claude Code, MCP registration is dual-path:
 - `~/.claude/settings.json` — declarative MCP entry (used by hooks config)
 - Runtime registration via `claude mcp add -s user ai-memory` (so the `claude` CLI discovers the server), with fallback to writing `~/.claude.json` directly if the `claude` command is unavailable
 
-#### Stdin Normalization Layer (`cli.ts`)
+#### Per-IDE Stdin Adapter (`cli.ts`)
 
-Hook subcommands receive context from the IDE via stdin JSON. A normalization layer bridges protocol differences:
+Hook subcommands receive context from the IDE via stdin JSON. `parseIdeStdin(ide, raw, cliOpts)` maps IDE-specific fields to a typed `HookPayload`:
 
-| Resolver | Claude Code field | Cursor field | Fallback |
-|----------|------------------|--------------|----------|
-| `resolveSessionId` | `session_id` | `conversation_id` | generate UUID |
-| `resolveWorkspace` | `cwd` (basename) | `workspace_roots[0]` (basename) | `process.cwd()` basename |
-| `resolvePrompt` | `prompt` | `prompt` | `""` |
-| `resolveAssistantContent` | searches 8+ fields (`last_assistant_message`, `response`, `output`, etc.) | same | reads `transcript_path` JSONL as last resort |
+| Field | Claude Code stdin | Cursor stdin |
+|-------|------------------|--------------|
+| `sessionId` | `session_id` | `conversation_id` |
+| `workspace` | `basename(cwd)` | `basename(workspace_roots[0])` |
+| `workspacePath` | `cwd` | `workspace_roots[0]` |
+| `assistantContent` (stop) | `last_assistant_message` | N/A (metadata only) |
+| `assistantContent` (afterAgentResponse) | N/A | `text` |
+| `prompt` | `prompt` | `prompt` |
 
-`extractTextFromUnknown()` recursively unwraps text from nested content structures (arrays of `{type:"text", text:...}`, nested `.message.content`, etc.) to handle varying payload shapes.
+Each IDE has exactly one known field per datum — no fallback chains. Missing expected fields emit structured warnings to the `health_warnings` table.
 
-Output format also varies: Claude Code hooks emit plain text, Cursor hooks emit JSON.
+Output format varies: Claude Code hooks emit plain text, Cursor hooks emit JSON.
+
+#### Phantom Hook Detection
+
+When Claude Code runs as an extension inside a host IDE (Cursor, VSCode, Windsurf), both the host's native hooks AND Claude Code's `~/.claude/settings.json` hooks fire for the same event. This creates duplicate invocations with mismatched payloads.
+
+Detection uses `hook_event_name` convention: Claude Code sends PascalCase events (`SessionStart`, `UserPromptSubmit`, `Stop`), host IDEs send camelCase (`sessionStart`, `beforeSubmitPrompt`, `stop`). If `--ide claude-code` receives a camelCase event (or vice versa), the hook is a phantom and silently skipped.
 
 ### MCP (`mcp/stdio.ts` + `mcp/server.ts`)
 
@@ -521,4 +535,6 @@ Tests use in-memory SQLite (`:memory:`) — no filesystem side effects. Test str
 | **external_id** | IDE-assigned session identifier, used for conversation dedup across imports and hooks |
 | **content_hash** | SHA-256 of turn content, used for turn-level dedup |
 | **project_key** | Stable project identifier — derived via `deriveProjectKey()`: `path:<sha1>` from absolute workspace path, `src:<token>` from IDE source path, or `ws:<label>` fallback from workspace label |
-| **tool_usage** | Per-call telemetry table for MCP tools — records latency, result count, and errors |
+| **tool_usage** | Per-call telemetry table for MCP tools and hooks — records latency, result count, and errors. Hook entries use `hook:<event>` naming |
+| **health_warnings** | Upsert-based table tracking integration health issues (missing fields, config drift, empty captures). Warnings are resolved when conditions clear |
+| **Phantom hook** | A duplicate hook invocation caused by Claude Code extension in a host IDE (Cursor, VSCode) firing `~/.claude/settings.json` hooks alongside the host's native hooks. Detected and silently dropped via `hook_event_name` convention mismatch |
