@@ -1,75 +1,69 @@
 export const SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS sessions (
+CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
+  external_id TEXT UNIQUE,
+  project_key TEXT,
   workspace TEXT,
   ide TEXT,                     -- cursor|claude-code|cli
-  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','completed','crashed')),
+  source_path TEXT,
+  source_mtime TEXT,
+  title TEXT,
+  summary TEXT,
   turn_count INTEGER NOT NULL DEFAULT 0,
-  last_extraction_turn INTEGER NOT NULL DEFAULT 0,
   started_at TEXT NOT NULL,
-  ended_at TEXT
+  updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS memory_entries (
+CREATE TABLE IF NOT EXISTS turns (
   id TEXT PRIMARY KEY,
-  type TEXT NOT NULL CHECK(type IN ('decision','correction','pattern','learning','preference','fact')),
+  conversation_id TEXT NOT NULL REFERENCES conversations(id),
+  role TEXT NOT NULL CHECK(role IN ('user','assistant','system')),
   content TEXT NOT NULL,
   content_hash TEXT NOT NULL,
-  workspace TEXT,
-  session_id TEXT REFERENCES sessions(id),
-  score REAL NOT NULL DEFAULT 1.0,
-  repetition_count INTEGER NOT NULL DEFAULT 1,
-  source TEXT,                  -- hook|cli|migration|mcp
-  source_event_id TEXT,
-  extraction_confidence REAL NOT NULL DEFAULT 1.0,
-  created_at TEXT NOT NULL,
-  last_accessed_at TEXT,
-  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','superseded','archived')),
-  embedding BLOB
+  turn_number INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_memory_entries_hash_workspace
-ON memory_entries(content_hash, COALESCE(workspace, '__NULL__'));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_hash_conversation
+ON turns(content_hash, conversation_id);
 
-CREATE TABLE IF NOT EXISTS captured_events (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL REFERENCES sessions(id),
-  workspace TEXT,
-  content TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  source TEXT,                  -- hook|cli|manual
-  created_at TEXT NOT NULL,
-  extraction_status TEXT NOT NULL DEFAULT 'pending' CHECK(extraction_status IN ('pending','extracted','failed'))
-);
+CREATE INDEX IF NOT EXISTS idx_turns_conversation
+ON turns(conversation_id, turn_number);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_captured_events_hash_session
-ON captured_events(content_hash, session_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_project_key
+ON conversations(project_key);
 
-CREATE TABLE IF NOT EXISTS memory_links (
-  id TEXT PRIMARY KEY,
-  source_id TEXT NOT NULL,
-  target_id TEXT NOT NULL,
-  type TEXT NOT NULL CHECK(type IN ('supersedes','contradicts','supports','refines','related')),
-  confidence REAL NOT NULL DEFAULT 1.0,
-  created_at TEXT NOT NULL,
-  FOREIGN KEY(source_id) REFERENCES memory_entries(id) ON DELETE CASCADE,
-  FOREIGN KEY(target_id) REFERENCES memory_entries(id) ON DELETE CASCADE
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS memory_entries_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(
   id UNINDEXED,
   content,
-  type,
-  workspace,
   tokenize='unicode61'
 );
 
-CREATE VIRTUAL TABLE IF NOT EXISTS captured_events_fts USING fts5(
-  id UNINDEXED,
-  content,
-  workspace,
-  tokenize='unicode61'
+CREATE TABLE IF NOT EXISTS tool_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tool_name TEXT NOT NULL,
+  called_at TEXT NOT NULL,
+  latency_ms INTEGER NOT NULL,
+  workspace TEXT,
+  param_keys TEXT,
+  result_count INTEGER,
+  success INTEGER NOT NULL DEFAULT 1,
+  error_type TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_usage_tool_called
+ON tool_usage(tool_name, called_at);
+
+CREATE TABLE IF NOT EXISTS health_warnings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  category TEXT NOT NULL,
+  message TEXT NOT NULL,
+  detail TEXT,
+  first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at TEXT,
+  UNIQUE(category, message)
 );
 `;

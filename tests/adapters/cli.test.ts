@@ -1,148 +1,180 @@
 import { describe, expect, test } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createTempApp, ensureSession, seedMemory, writeMemoryMd } from '../test-helpers.js';
 
-function runCli(args: string[], env: Record<string, string>) {
+function runCli(args: string[], env: Record<string, string>, stdin?: string) {
   return spawnSync('npx', ['tsx', 'src/cli.ts', ...args], {
     cwd: process.cwd(),
     env: { ...process.env, ...env },
-    encoding: 'utf8'
+    encoding: 'utf8',
+    input: stdin
   });
 }
 
-describe('CLI', () => {
-  test('37 cli.query-returns-results', () => {
-    const { app, dbPath } = createTempApp();
-    seedMemory(app, { id: 'm1', content: 'queryable value', workspace: 'w1' });
-    const r = runCli(['query', 'queryable', '--workspace', 'w1'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(r.status).toBe(0);
-    expect(r.stdout).toContain('memories');
+describe('CLI commands', () => {
+  test('init + hook + conversations + search flow', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-new-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
+
+    expect(runCli(['init', '--json'], env).status).toBe(0);
+    const startStdin = JSON.stringify({ conversation_id: 'conv-cli-1', workspace_roots: ['/tmp/my-workspace'] });
+    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
+    const promptStdin = JSON.stringify({ conversation_id: 'conv-cli-1', workspace_roots: ['/tmp/my-workspace'], prompt: 'Build search API' });
+    expect(runCli(['hook', 'prompt-submit', '--ide', 'cursor'], env, promptStdin).status).toBe(0);
+    // D038: Cursor uses afterAgentResponse for assistant content
+    const afterStdin = JSON.stringify({ conversation_id: 'conv-cli-1', workspace_roots: ['/tmp/my-workspace'], text: 'Implemented search' });
+    expect(runCli(['hook', 'afterAgentResponse', '--ide', 'cursor'], env, afterStdin).status).toBe(0);
+
+    const conversations = runCli(['conversations', '--json'], env);
+    expect(conversations.status).toBe(0);
+    const parsedConversations = JSON.parse(conversations.stdout);
+    expect(parsedConversations.conversations.length).toBeGreaterThan(0);
+
+    const search = runCli(['search', 'search', '--json'], env);
+    expect(search.status).toBe(0);
+    const parsedSearch = JSON.parse(search.stdout);
+    expect(parsedSearch.conversations.length).toBeGreaterThan(0);
   });
 
-  test('38 cli.query-json-mode', () => {
-    const { app, dbPath } = createTempApp();
-    seedMemory(app, { id: 'm1', content: 'json query value', workspace: 'w1' });
-    const r = runCli(['query', 'json', '--workspace', 'w1', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(r.status).toBe(0);
-    const parsed = JSON.parse(r.stdout);
-    expect(parsed).toHaveProperty('memories');
-    expect(parsed).toHaveProperty('used_tokens');
+  // D038 D1: Cursor uses afterAgentResponse for assistant content, not stop hook
+  test('afterAgentResponse hook captures assistant content via stdin.text (Cursor)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-after-agent-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
+
+    expect(runCli(['init', '--json'], env).status).toBe(0);
+    const startStdin = JSON.stringify({ conversation_id: 'conv-cli-after', workspace_roots: ['/tmp/ws'] });
+    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
+    const promptStdin = JSON.stringify({ conversation_id: 'conv-cli-after', workspace_roots: ['/tmp/ws'], prompt: 'User asks question' });
+    expect(runCli(['hook', 'prompt-submit', '--ide', 'cursor'], env, promptStdin).status).toBe(0);
+    const afterStdin = JSON.stringify({ conversation_id: 'conv-cli-after', workspace_roots: ['/tmp/ws'], text: 'Assistant via afterAgentResponse' });
+    expect(runCli(['hook', 'afterAgentResponse', '--ide', 'cursor'], env, afterStdin).status).toBe(0);
+
+    const conv = JSON.parse(runCli(['conversations', '--json'], env).stdout).conversations[0];
+    const details = JSON.parse(runCli(['conversation', conv.id, '--json'], env).stdout);
+    expect(details.turns.map((t: { role: string }) => t.role)).toEqual(['user', 'assistant']);
+    expect(details.turns[1].content).toBe('Assistant via afterAgentResponse');
   });
 
-  test('39 cli.query-empty', () => {
-    const { dbPath } = createTempApp();
-    const r = runCli(['query', 'zzz-no-match', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(r.status).toBe(1);
+  // D038 D2: Cursor stop hook is metadata-only — no assistant content capture
+  test('cursor stop hook does not capture assistant content (metadata only)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-cursor-stop-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
+
+    expect(runCli(['init', '--json'], env).status).toBe(0);
+    const startStdin = JSON.stringify({ conversation_id: 'conv-cursor-stop', workspace_roots: ['/tmp/ws'] });
+    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
+    const promptStdin = JSON.stringify({ conversation_id: 'conv-cursor-stop', workspace_roots: ['/tmp/ws'], prompt: 'User question' });
+    expect(runCli(['hook', 'prompt-submit', '--ide', 'cursor'], env, promptStdin).status).toBe(0);
+    const stopStdin = JSON.stringify({ conversation_id: 'conv-cursor-stop', workspace_roots: ['/tmp/ws'], status: 'completed' });
+    expect(runCli(['hook', 'stop', '--ide', 'cursor'], env, stopStdin).status).toBe(0);
+
+    const conv = JSON.parse(runCli(['conversations', '--json'], env).stdout).conversations[0];
+    const details = JSON.parse(runCli(['conversation', conv.id, '--json'], env).stdout);
+    expect(details.turns.map((t: { role: string }) => t.role)).toEqual(['user']);
   });
 
-  test('40 cli.capture-stores-entry', () => {
-    const { dbPath } = createTempApp();
-    const r = runCli(['capture', 'hello', '--type', 'decision', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(r.status).toBe(0);
-    const q = runCli(['query', 'hello', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(q.status).toBe(0);
-  });
+  test('title command updates title and returns errors for invalid input', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-title-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
 
-  test('41 cli.capture-invalid-type', () => {
-    const { dbPath } = createTempApp();
-    const r = runCli(['capture', 'hello', '--type', 'invalid', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(r.status).toBe(2);
-  });
+    expect(runCli(['init', '--json'], env).status).toBe(0);
+    const startStdin = JSON.stringify({ conversation_id: 'conv-cli-title', workspace_roots: ['/tmp/ws'] });
+    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
+    const promptStdin = JSON.stringify({ conversation_id: 'conv-cli-title', workspace_roots: ['/tmp/ws'], prompt: 'Initial prompt' });
+    expect(runCli(['hook', 'prompt-submit', '--ide', 'cursor'], env, promptStdin).status).toBe(0);
 
-  test('42 cli.events-by-session', () => {
-    const { app, dbPath } = createTempApp();
-    ensureSession(app, 's1');
-    app.captureStore.insert({ id: 'e1', session_id: 's1', workspace: 'w1', content: 'x', content_hash: 'h1', source: 'hook', created_at: new Date().toISOString(), extraction_status: 'pending' });
-    const r = runCli(['events', '--session', 's1', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(r.status).toBe(0);
-    const parsed = JSON.parse(r.stdout);
-    expect(parsed.events).toHaveLength(1);
-  });
-
-  test('43 cli.status-health', () => {
-    const { dbPath } = createTempApp();
-    const r = runCli(['status'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(r.status).toBe(0);
-    expect(r.stdout).toContain('pending_extractions_count');
-  });
-
-  test('44 cli.status-json', () => {
-    const { dbPath } = createTempApp();
-    const r = runCli(['status', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(r.status).toBe(0);
-    const parsed = JSON.parse(r.stdout);
-    expect(parsed).toHaveProperty('db_path');
-  });
-
-  test('45 cli.sweep-runs-maintenance', () => {
-    const { dbPath } = createTempApp();
-    const r = runCli(['sweep', '--workspace', 'w1', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(r.status).toBe(0);
-    const parsed = JSON.parse(r.stdout);
-    expect(parsed).toHaveProperty('decayed');
-  });
-
-  test('46 cli.exit-codes', () => {
-    const { dbPath } = createTempApp();
-    const ok = runCli(['status', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    const empty = runCli(['query', 'no-match', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    const err = runCli(['capture', 'x', '--type', 'invalid', '--json'], { AI_MEMORY_DB_PATH: dbPath });
+    const conv = JSON.parse(runCli(['conversations', '--json'], env).stdout).conversations[0];
+    const ok = runCli(['title', conv.id, '  Better title   ', '--json'], env);
     expect(ok.status).toBe(0);
-    expect(empty.status).toBe(1);
-    expect(err.status).toBe(2);
-  });
-});
+    const okParsed = JSON.parse(ok.stdout);
+    expect(okParsed.conversation.title).toBe('Better title');
 
-describe('CLI — Migration', () => {
-  test('47 migrate.section-type-mapping', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-migrate-'));
-    const dbPath = join(dir, 'm.db');
-    const projectMd = join(dir, 'project.md');
-    writeMemoryMd(projectMd);
+    const bad = runCli(['title', conv.id, '   ', '--json'], env);
+    expect(bad.status).toBe(2);
+    expect(bad.stderr).toContain('Invalid title');
 
-    const m = runCli(['migrate', 'memory-md', '--scope', 'project', '--project-memory-path', projectMd, '--workspace', 'w1', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(m.status).toBe(0);
-
-    const q1 = runCli(['query', 'sqlite', '--workspace', 'w1', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(q1.stdout).toContain('decision');
+    const missing = runCli(['title', 'missing-id', 'Some title', '--json'], env);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain('Conversation not found');
   });
 
-  test('48 migrate.scope-machine', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-migrate-machine-'));
-    const dbPath = join(dir, 'm.db');
-    const machineMd = join(dir, 'machine.md');
-    writeMemoryMd(machineMd);
+  test('summarize command returns error for missing conversation', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-summarize-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
 
-    const m = runCli(['migrate', 'memory-md', '--scope', 'machine', '--machine-memory-path', machineMd, '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(m.status).toBe(0);
+    expect(runCli(['init', '--json'], env).status).toBe(0);
+
+    const missing = runCli(['summarize', 'missing-id', 'Some summary', '--json'], env);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain('Conversation not found');
   });
 
-  test('49 migrate.scope-project', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-migrate-project-'));
-    const dbPath = join(dir, 'm.db');
-    const projectMd = join(dir, 'project.md');
-    writeMemoryMd(projectMd);
+  test('usage command returns shared usage data', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-usage-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
 
-    const m = runCli(['migrate', 'memory-md', '--scope', 'project', '--project-memory-path', projectMd, '--workspace', 'project-a', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(m.status).toBe(0);
+    expect(runCli(['init', '--json'], env).status).toBe(0);
+    const startStdin = JSON.stringify({ conversation_id: 'conv-cli-usage', workspace_roots: ['/tmp/ws'] });
+    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
+
+    const usage = runCli(['usage', '--range', '7d', '--json'], env);
+    expect(usage.status).toBe(0);
+    const parsed = JSON.parse(usage.stdout);
+    expect(parsed.summary.range).toBe('7d');
+    expect(parsed).toHaveProperty('by_tool');
+    expect(parsed).toHaveProperty('time_series');
   });
 
-  test('50 migrate.idempotent', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-migrate-idem-'));
-    const dbPath = join(dir, 'm.db');
-    const projectMd = join(dir, 'project.md');
-    writeMemoryMd(projectMd);
+  test('hooks do not create .ai-memory marker in workspace root', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-no-marker-'));
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'ai-memory-workspace-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
 
-    const m1 = runCli(['migrate', 'memory-md', '--scope', 'project', '--project-memory-path', projectMd, '--workspace', 'w1', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    const m2 = runCli(['migrate', 'memory-md', '--scope', 'project', '--project-memory-path', projectMd, '--workspace', 'w1', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    expect(m1.status).toBe(0);
-    expect(m2.status).toBe(0);
+    expect(runCli(['init', '--json'], env).status).toBe(0);
+    const startStdin = JSON.stringify({ conversation_id: 'conv-no-marker', workspace_roots: [workspaceDir] });
+    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
+    const promptStdin = JSON.stringify({
+      conversation_id: 'conv-no-marker',
+      workspace_roots: [workspaceDir],
+      prompt: 'No marker side effects'
+    });
+    expect(runCli(['hook', 'prompt-submit', '--ide', 'cursor'], env, promptStdin).status).toBe(0);
+    // D038: Cursor uses afterAgentResponse for assistant content
+    const afterStdin = JSON.stringify({
+      conversation_id: 'conv-no-marker',
+      workspace_roots: [workspaceDir],
+      text: 'Acknowledged'
+    });
+    expect(runCli(['hook', 'afterAgentResponse', '--ide', 'cursor'], env, afterStdin).status).toBe(0);
 
-    const q = runCli(['query', 'sqlite', '--workspace', 'w1', '--json'], { AI_MEMORY_DB_PATH: dbPath });
-    const parsed = JSON.parse(q.stdout);
-    expect(parsed.memories.length).toBeGreaterThan(0);
+    expect(existsSync(join(workspaceDir, '.ai-memory'))).toBe(false);
   });
+
+  test('init --ide claude-code syncs runtime MCP registry in ~/.claude.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-claude-registry-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
+
+    const init = runCli(['init', '--ide', 'claude-code', '--json'], env);
+    expect(init.status).toBe(0);
+
+    const settingsPath = join(dir, '.claude', 'settings.json');
+    const registryPath = join(dir, '.claude.json');
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+
+    expect(settings.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
+    expect(registry.mcpServers?.['ai-memory']?.command).toBe('ai-memory');
+    expect(registry.mcpServers?.['ai-memory']?.args).toEqual(['mcp']);
+  });
+
 });

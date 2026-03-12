@@ -1,0 +1,291 @@
+import { useCallback, useEffect, useState } from 'react';
+import { rpc } from '../rpc';
+import { formatDate, formatWorkspace } from '../workspace-colors';
+import { type RefreshStateChange } from '../refresh';
+
+interface StatusPayload {
+  generated_at: string;
+  system_health: {
+    db_path: string;
+    db_exists: boolean;
+    db_readable: boolean;
+    conversation_count: number;
+    turn_count: number;
+    latest_updated_at: string | null;
+  };
+  data_coverage: {
+    by_ide: Array<{ ide: string; count: number }>;
+    by_workspace_top: Array<{ project_key: string; workspace: string; count: number }>;
+    oldest_started_at: string | null;
+    latest_updated_at: string | null;
+    last_24h_conversations: number;
+    last_7d_conversations: number;
+  };
+  integrations: {
+    cursor: {
+      hooks_file: string;
+      mcp_file: string;
+      hooks_file_exists: boolean;
+      mcp_file_exists: boolean;
+      hooks_parse_error: string | null;
+      mcp_parse_error: string | null;
+      hooks: Record<string, boolean>;
+      mcp_configured: boolean;
+    };
+    claude_code: {
+      settings_file: string;
+      settings_exists: boolean;
+      settings_parse_error: string | null;
+      hooks: Record<string, boolean>;
+      settings_mcp_configured: boolean;
+      registry_file: string;
+      registry_exists: boolean;
+      registry_parse_error: string | null;
+      registry_mcp_configured: boolean;
+      mcp_configured: boolean;
+    };
+  };
+  config_snapshot: {
+    injection_max_conversations: number;
+    injection_max_title_chars: number;
+    injection_max_summary_chars: number;
+    injection_max_total_chars: number;
+    search_default_limit: number;
+    config_path: string;
+    config_exists: boolean;
+    config_mtime: string | null;
+  };
+  runtime: {
+    last_ingest_at: string | null;
+    last_error: string | null;
+    note: string;
+  };
+  usage_summary: {
+    tool_calls_24h: number;
+    tool_calls_7d: number;
+    error_rate_7d: number;
+    empty_search_rate_7d: number;
+    avg_latency_ms_7d: number;
+  };
+}
+
+function BoolBadge({ ok }: { ok: boolean }) {
+  return <span className={`status-badge ${ok ? 'ok' : 'warn'}`}>{ok ? 'ok' : 'warn'}</span>;
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="status-section">
+      <h3 className="status-section-title">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+interface StatusViewProps {
+  active: boolean;
+  onRefreshStateChange: RefreshStateChange;
+}
+
+export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
+  const [data, setData] = useState<StatusPayload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await rpc<StatusPayload>('getDashboardStatus', {});
+      setData(res);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (active && !data) load();
+  }, [active, data, load]);
+
+  useEffect(() => {
+    onRefreshStateChange({
+      run: load,
+      canRefresh: true,
+      isRefreshing: loading,
+    });
+    return () => onRefreshStateChange(null);
+  }, [onRefreshStateChange, load, loading]);
+
+  return (
+    <>
+      <div className="toolbar">
+        <span className="toolbar-title">Status</span>
+        {data?.generated_at && (
+          <span className="toolbar-meta">Snapshot: {formatDate(data.generated_at)}</span>
+        )}
+        <span className="toolbar-spacer" />
+      </div>
+
+      {error && (
+        <div className="error-state">
+          <div className="error-state-title">{error}</div>
+        </div>
+      )}
+
+      {!error && !data && (
+        <div className="loading-center"><div className="spinner spinner-md" /></div>
+      )}
+
+      {data && (
+        <div className="status-body">
+          <Section title="System Health">
+            <div className="status-grid">
+              <div className="status-card">
+                <div className="status-card-k">DB path</div>
+                <div className="status-mono">{data.system_health.db_path}</div>
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">DB exists</div>
+                <BoolBadge ok={data.system_health.db_exists} />
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">DB readable</div>
+                <BoolBadge ok={data.system_health.db_readable} />
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">Conversations</div>
+                <div className="status-big">{data.system_health.conversation_count}</div>
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">Turns</div>
+                <div className="status-big">{data.system_health.turn_count}</div>
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">Latest update</div>
+                <div>{data.system_health.latest_updated_at ? formatDate(data.system_health.latest_updated_at) : '—'}</div>
+              </div>
+            </div>
+          </Section>
+
+          <Section title="Data Coverage">
+            <div className="status-row">
+              <div className="status-card">
+                <div className="status-card-k">Date range</div>
+                <div>
+                  {data.data_coverage.oldest_started_at ? formatDate(data.data_coverage.oldest_started_at) : '—'}
+                  {' '}→{' '}
+                  {data.data_coverage.latest_updated_at ? formatDate(data.data_coverage.latest_updated_at) : '—'}
+                </div>
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">Last 24h / 7d</div>
+                <div>{data.data_coverage.last_24h_conversations} / {data.data_coverage.last_7d_conversations}</div>
+              </div>
+            </div>
+            <div className="status-two-col">
+              <div className="status-card">
+                <div className="status-card-k">By IDE</div>
+                {data.data_coverage.by_ide.map((row) => (
+                  <div key={row.ide} className="status-list-row">
+                    <span>{row.ide}</span>
+                    <span className="status-mono">{row.count}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">Top workspaces</div>
+                {data.data_coverage.by_workspace_top.map((row) => (
+                  <div key={row.project_key} className="status-list-row">
+                    <span>{formatWorkspace(row.workspace)}</span>
+                    <span className="status-mono">{row.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Section>
+
+          <Section title="IDE Integrations">
+            <div className="status-two-col">
+              <div className="status-card">
+                <div className="status-card-k">Cursor</div>
+                <div className="status-list-row"><span>Hooks file exists</span><BoolBadge ok={data.integrations.cursor.hooks_file_exists} /></div>
+                <div className="status-list-row"><span>MCP file exists</span><BoolBadge ok={data.integrations.cursor.mcp_file_exists} /></div>
+                <div className="status-list-row"><span>MCP configured</span><BoolBadge ok={data.integrations.cursor.mcp_configured} /></div>
+                {Object.entries(data.integrations.cursor.hooks).map(([k, ok]) => (
+                  <div key={k} className="status-list-row"><span>{k}</span><BoolBadge ok={ok} /></div>
+                ))}
+                <div className="status-mono status-path">{data.integrations.cursor.hooks_file}</div>
+                <div className="status-mono status-path">{data.integrations.cursor.mcp_file}</div>
+                {data.integrations.cursor.hooks_parse_error && <div className="status-warn">{data.integrations.cursor.hooks_parse_error}</div>}
+                {data.integrations.cursor.mcp_parse_error && <div className="status-warn">{data.integrations.cursor.mcp_parse_error}</div>}
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">Claude Code</div>
+                <div className="status-list-row"><span>Settings exists</span><BoolBadge ok={data.integrations.claude_code.settings_exists} /></div>
+                <div className="status-list-row"><span>Settings MCP</span><BoolBadge ok={data.integrations.claude_code.settings_mcp_configured} /></div>
+                <div className="status-list-row"><span>Registry MCP</span><BoolBadge ok={data.integrations.claude_code.registry_mcp_configured} /></div>
+                <div className="status-list-row"><span>MCP ready</span><BoolBadge ok={data.integrations.claude_code.mcp_configured} /></div>
+                {Object.entries(data.integrations.claude_code.hooks).map(([k, ok]) => (
+                  <div key={k} className="status-list-row"><span>{k}</span><BoolBadge ok={ok} /></div>
+                ))}
+                <div className="status-mono status-path">{data.integrations.claude_code.settings_file}</div>
+                {data.integrations.claude_code.registry_file && <div className="status-mono status-path">{data.integrations.claude_code.registry_file}</div>}
+                {data.integrations.claude_code.settings_parse_error && <div className="status-warn">{data.integrations.claude_code.settings_parse_error}</div>}
+                {data.integrations.claude_code.registry_parse_error && <div className="status-warn">{data.integrations.claude_code.registry_parse_error}</div>}
+              </div>
+            </div>
+          </Section>
+
+          <Section title="Config Snapshot">
+            <div className="status-card">
+              <div className="status-list-row"><span>injection_max_conversations</span><span className="status-mono">{data.config_snapshot.injection_max_conversations}</span></div>
+              <div className="status-list-row"><span>injection_max_title_chars</span><span className="status-mono">{data.config_snapshot.injection_max_title_chars}</span></div>
+              <div className="status-list-row"><span>injection_max_summary_chars</span><span className="status-mono">{data.config_snapshot.injection_max_summary_chars}</span></div>
+              <div className="status-list-row"><span>injection_max_total_chars</span><span className="status-mono">{data.config_snapshot.injection_max_total_chars}</span></div>
+              <div className="status-list-row"><span>search_default_limit</span><span className="status-mono">{data.config_snapshot.search_default_limit}</span></div>
+              <div className="status-list-row"><span>config exists</span><BoolBadge ok={data.config_snapshot.config_exists} /></div>
+              <div className="status-list-row"><span>config mtime</span><span>{data.config_snapshot.config_mtime ? formatDate(data.config_snapshot.config_mtime) : '—'}</span></div>
+              <div className="status-mono status-path">{data.config_snapshot.config_path}</div>
+            </div>
+          </Section>
+
+          <Section title="Runtime Operations">
+            <div className="status-card">
+              <div className="status-list-row"><span>last_ingest_at</span><span>{data.runtime.last_ingest_at ? formatDate(data.runtime.last_ingest_at) : '—'}</span></div>
+              <div className="status-list-row"><span>last_error</span><span>{data.runtime.last_error ?? '—'}</span></div>
+              <div className="status-note">{data.runtime.note}</div>
+            </div>
+          </Section>
+
+          <Section title="Usage Summary">
+            <div className="status-grid">
+              <div className="status-card">
+                <div className="status-card-k">MCP calls (24h)</div>
+                <div className="status-big">{data.usage_summary.tool_calls_24h}</div>
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">MCP calls (7d)</div>
+                <div className="status-big">{data.usage_summary.tool_calls_7d}</div>
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">Error rate (7d)</div>
+                <div className="status-big">{(data.usage_summary.error_rate_7d * 100).toFixed(1)}%</div>
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">Empty search rate (7d)</div>
+                <div className="status-big">{(data.usage_summary.empty_search_rate_7d * 100).toFixed(1)}%</div>
+              </div>
+              <div className="status-card">
+                <div className="status-card-k">Avg latency (7d)</div>
+                <div className="status-big">{data.usage_summary.avg_latency_ms_7d} ms</div>
+              </div>
+            </div>
+          </Section>
+        </div>
+      )}
+    </>
+  );
+}
+

@@ -1,59 +1,53 @@
-export type MemoryType = 'decision' | 'correction' | 'pattern' | 'learning' | 'preference' | 'fact';
-export type MemoryState = 'active' | 'superseded' | 'archived';
-export type LinkType = 'supersedes' | 'contradicts' | 'supports' | 'refines' | 'related';
-export type SessionStatus = 'active' | 'completed' | 'crashed';
-export type ExtractionStatus = 'pending' | 'extracted' | 'failed';
-export type MemorySource = 'hook' | 'cli' | 'migration' | 'mcp';
 export type IdeType = 'cursor' | 'claude-code' | 'cli';
+export type TurnRole = 'user' | 'assistant' | 'system';
 
-export interface MemoryEntry {
+export interface Conversation {
   id: string;
-  type: MemoryType;
-  content: string;
-  content_hash: string;
-  workspace: string | null;
-  session_id: string | null;
-  score: number;
-  repetition_count: number;
-  source: MemorySource | null;
-  source_event_id: string | null;
-  extraction_confidence: number;
-  created_at: string;
-  last_accessed_at: string | null;
-  state: MemoryState;
-  embedding: Buffer | null;
-}
-
-export interface CapturedEvent {
-  id: string;
-  session_id: string;
-  workspace: string | null;
-  content: string;
-  content_hash: string;
-  source: string | null;
-  created_at: string;
-  extraction_status: ExtractionStatus;
-}
-
-export interface MemoryLink {
-  id: string;
-  source_id: string;
-  target_id: string;
-  type: LinkType;
-  confidence: number;
-  created_at: string;
-}
-
-export interface SessionRow {
-  id: string;
+  external_id: string;
+  project_key: string | null;
   workspace: string | null;
   ide: IdeType | null;
-  status: SessionStatus;
+  source_path: string | null;
+  source_mtime: string | null;
+  title: string | null;
+  summary: string | null;
   turn_count: number;
-  last_extraction_turn: number;
   started_at: string;
-  ended_at: string | null;
+  updated_at: string;
 }
 
-export const MEMORY_TYPES: MemoryType[] = ['decision', 'correction', 'pattern', 'learning', 'preference', 'fact'];
-export const LINK_TYPES: LinkType[] = ['supersedes', 'contradicts', 'supports', 'refines', 'related'];
+export interface Turn {
+  id: string;
+  conversation_id: string;
+  role: TurnRole;
+  content: string;
+  content_hash: string;
+  turn_number: number;
+  created_at: string;
+}
+
+export interface SearchParams {
+  query?: string;
+  workspace?: string | null;
+  date_from?: string;
+  date_to?: string;
+  role?: 'user' | 'assistant';
+  limit?: number;
+  offset?: number;
+}
+
+export interface SearchConversationMatch {
+  id: string;
+  title: string | null;
+  summary: string | null;
+  workspace: string | null;
+  ide: string | null;
+  started_at: string;
+  turn_count: number;
+  match_source: 'turn' | 'summary' | 'title';
+  matching_turns: Array<{
+    role: string;
+    content: string;
+    turn_number: number;
+  }>;
+}

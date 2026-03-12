@@ -2,23 +2,20 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
-/** Configuration shape — all fields optional (merged with defaults) */
 export interface AiMemoryConfig {
-  /** L2 extraction interval in turns. 0 = disable L2 entirely. Default: 10 */
-  extraction_interval: number;
-  /** Total token budget for session-start injection. Default: 400 */
-  token_budget: number;
-  /** Token budget reserved for core memories (top-scored, always injected). Default: 200 */
-  core_budget: number;
-  /** Number of new captured events before auto-tune triggers. 0 = disable auto-tune. Default: 500 */
-  tune_threshold: number;
+  injection_max_conversations: number;
+  injection_max_title_chars: number;
+  injection_max_summary_chars: number;
+  injection_max_total_chars: number;
+  search_default_limit: number;
 }
 
 const DEFAULTS: AiMemoryConfig = {
-  extraction_interval: 10,
-  token_budget: 400,
-  core_budget: 200,
-  tune_threshold: 500,
+  injection_max_conversations: 5,
+  injection_max_title_chars: 80,
+  injection_max_summary_chars: 150,
+  injection_max_total_chars: 1800,
+  search_default_limit: 20,
 };
 
 const VALID_KEYS = Object.keys(DEFAULTS) as (keyof AiMemoryConfig)[];
@@ -34,7 +31,8 @@ export function loadConfig(customPath?: string): AiMemoryConfig {
       const raw = JSON.parse(readFileSync(path, 'utf8'));
       return { ...DEFAULTS, ...raw };
     } catch {
-      // Corrupted config — use defaults
+      // D038 D9: Log corruption warning to stderr (health_warnings persisted by caller if DB available)
+      process.stderr.write(`[ai-memory] config.json parse failed at ${path}, using defaults\n`);
     }
   }
   return { ...DEFAULTS };
@@ -67,4 +65,8 @@ export function setConfigValue(key: string, value: string, customPath?: string):
   config[key as keyof AiMemoryConfig] = numValue;
   saveConfig(config, customPath);
   return { key, value: numValue };
+}
+
+export function getDefaults(): AiMemoryConfig {
+  return { ...DEFAULTS };
 }

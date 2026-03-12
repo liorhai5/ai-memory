@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "claude-fixture-session-1",
+  "cwd": "/tmp/fixture-claude-workspace",
+  "stop_hook_active": true,
+  "last_assistant_message": "Captured from claude fixture payload"
+}

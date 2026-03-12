@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "beforeSubmitPrompt",
+  "conversation_id": "cursor-fixture-conv-1",
+  "workspace_roots": [
+    "/tmp/fixture-workspace"
+  ],
+  "prompt": "Please add replay tests for hook payloads"
+}
