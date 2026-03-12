@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createApp } from './app.js';
 import { getConfigValue, setConfigValue, loadConfig, saveConfig } from './services/config-service.js';
-import { beforeSubmitPromptHook, sessionStartHook, stopHook, sessionEndHook } from './hooks/handlers.js';
+import { beforeSubmitPromptHook, sessionStartHook, stopHook, sessionEndHook, turnCompleteHook } from './hooks/handlers.js';
 import { deriveProjectKey, normalizeWorkspaceLabel } from './utils/workspace-identity.js';
 import { generateInitConfig, checkHookPresence } from './hooks/init-config.js';
 import { stripPromptWrappers } from './utils/strip.js';
@@ -432,12 +432,18 @@ function parseIdeStdin(ide: IdeType, raw: Record<string, any>, cliOpts: { sessio
   const warnings: string[] = [];
   const stdinKeys = Object.keys(raw);
 
-  // Session ID: CC uses session_id, Cursor uses conversation_id
+  // Session ID: CC uses session_id, Cursor uses conversation_id, Codex uses thread-id
   let sessionId: string;
   if (ide === 'claude-code') {
     sessionId = cliOpts.sessionId ?? (typeof raw.session_id === 'string' ? raw.session_id : '');
     if (!sessionId) {
       if (stdinKeys.length > 0) warnings.push('claude-code: missing session_id in stdin');
+      sessionId = newId();
+    }
+  } else if (ide === 'codex') {
+    sessionId = cliOpts.sessionId ?? (typeof raw['thread-id'] === 'string' ? raw['thread-id'] : '');
+    if (!sessionId) {
+      if (stdinKeys.length > 0) warnings.push('codex: missing thread-id in payload');
       sessionId = newId();
     }
   } else {
@@ -456,13 +462,13 @@ function parseIdeStdin(ide: IdeType, raw: Record<string, any>, cliOpts: { sessio
     workspace = normalizeWorkspaceLabel(basename(cliOpts.workspace)) ?? 'global';
   } else if (cliOpts.workspace) {
     workspace = normalizeWorkspaceLabel(cliOpts.workspace) ?? 'global';
-  } else if (ide === 'claude-code') {
+  } else if (ide === 'claude-code' || ide === 'codex') {
     const cwd = raw.cwd;
     if (typeof cwd === 'string' && cwd.startsWith('/')) {
       workspacePath = cwd;
       workspace = normalizeWorkspaceLabel(basename(cwd)) ?? 'global';
     } else {
-      if (stdinKeys.length > 0) warnings.push('claude-code: missing cwd in stdin');
+      if (stdinKeys.length > 0) warnings.push(`${ide}: missing cwd in payload`);
       workspace = normalizeWorkspaceLabel(basename(process.cwd())) ?? 'global';
     }
   } else {
@@ -477,18 +483,28 @@ function parseIdeStdin(ide: IdeType, raw: Record<string, any>, cliOpts: { sessio
   }
 
   // D038 D3: Assistant content — one known field per IDE, no fallback chain
-  // CC stop: last_assistant_message | Cursor afterAgentResponse: text
+  // CC stop: last_assistant_message | Cursor afterAgentResponse: text | Codex notify: last-assistant-message
   let assistantContent = '';
   if (cliOpts.content) {
     assistantContent = cliOpts.content;
   } else if (ide === 'claude-code') {
     assistantContent = typeof raw.last_assistant_message === 'string' ? raw.last_assistant_message : '';
+  } else if (ide === 'codex') {
+    assistantContent = typeof raw['last-assistant-message'] === 'string' ? raw['last-assistant-message'] : '';
   } else {
     assistantContent = typeof raw.text === 'string' ? raw.text : '';
   }
 
-  // Prompt
-  const prompt = cliOpts.prompt ?? (typeof raw.prompt === 'string' ? raw.prompt : '');
+  // Prompt: CC/Cursor use prompt, Codex uses input-messages[0]
+  let prompt = '';
+  if (cliOpts.prompt) {
+    prompt = cliOpts.prompt;
+  } else if (ide === 'codex') {
+    const msgs = raw['input-messages'];
+    prompt = Array.isArray(msgs) && typeof msgs[0] === 'string' ? msgs[0] : '';
+  } else {
+    prompt = typeof raw.prompt === 'string' ? raw.prompt : '';
+  }
 
   return { sessionId, workspace, workspacePath, prompt, assistantContent, stdinKeys, warnings, skip: false };
 }
@@ -703,6 +719,62 @@ hookCmd
       console.log(JSON.stringify(result));
     } catch (err) {
       if (payload) recordHookUsage('session-end', payload, ide, start, false, err instanceof Error ? err.name : 'UNKNOWN');
+      process.stderr.write(String(err));
+      process.exit(0);
+    }
+  });
+
+// D039: Codex turn-complete — single event captures both user prompt and assistant response.
+// Codex notify passes JSON as argv (not stdin), so we parse from the positional argument.
+const CODEX_SYSTEM_PROMPT_PATTERNS = [
+  'Generate a concise UI title',
+  'generate a clear, informative task title',
+  'You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title',
+];
+
+function isCodexSystemTurn(inputMessages: unknown): boolean {
+  if (!Array.isArray(inputMessages) || typeof inputMessages[0] !== 'string') return false;
+  const first = inputMessages[0] as string;
+  return CODEX_SYSTEM_PROMPT_PATTERNS.some(p => first.includes(p));
+}
+
+hookCmd
+  .command('turn-complete')
+  .requiredOption('--ide <ide>')
+  .argument('[payload]', 'JSON payload from Codex notify (argv)')
+  .action((payloadArg: string | undefined, opts: { ide: string }) => {
+    const start = Date.now();
+    const ide = opts.ide as IdeType;
+    let payload: HookPayload | null = null;
+    try {
+      // Codex notify passes JSON as argv[1]; fall back to stdin
+      let raw: Record<string, any> = {};
+      if (payloadArg) {
+        try { raw = JSON.parse(payloadArg); } catch { /* ignore parse errors */ }
+      }
+      if (Object.keys(raw).length === 0) {
+        raw = parseStdin();
+      }
+
+      // Filter out system/title-generation turns
+      if (isCodexSystemTurn(raw['input-messages'])) return;
+
+      payload = parseIdeStdin(ide, raw, {});
+      if (payload.skip) return;
+      persistHookWarnings(payload.warnings);
+
+      turnCompleteHook({
+        ide,
+        session_id: payload.sessionId,
+        workspace: payload.workspace,
+        project_key: deriveProjectKey({ workspace: payload.workspace, workspacePath: payload.workspacePath }),
+        prompt: payload.prompt,
+        content: payload.assistantContent,
+        dbPath
+      });
+      recordHookUsage('turn-complete', payload, ide, start, true, undefined, (payload.prompt.length + payload.assistantContent.length));
+    } catch (err) {
+      if (payload) recordHookUsage('turn-complete', payload, ide, start, false, err instanceof Error ? err.name : 'UNKNOWN');
       process.stderr.write(String(err));
       process.exit(0);
     }

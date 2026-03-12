@@ -81,6 +81,51 @@ export function stopHook(input: {
   return {};
 }
 
+export function turnCompleteHook(input: {
+  ide: IdeType;
+  session_id: string;
+  workspace: string | null;
+  project_key?: string | null;
+  prompt: string;
+  content: string;
+  dbPath?: string;
+}) {
+  const app = createApp(input.dbPath);
+  const conversation = app.conversationStore.upsertConversationByExternalId({
+    external_id: input.session_id,
+    workspace: input.workspace,
+    project_key: input.project_key ?? null,
+    ide: input.ide
+  });
+
+  // Capture user turn
+  if (input.prompt.trim()) {
+    const inserted = app.conversationStore.addTurn({
+      conversation_id: conversation.id,
+      role: 'user',
+      content: input.prompt.trim()
+    });
+    if (inserted && inserted.turn_number === 1) {
+      const clean = stripPromptWrappers(input.prompt);
+      if (clean) {
+        app.conversationStore.setTitleIfEmpty(conversation.id, clean);
+        app.conversationStore.upsertSummary(conversation.id, clean);
+      }
+    }
+  }
+
+  // Capture assistant turn
+  if (input.content.trim()) {
+    app.conversationStore.addTurn({
+      conversation_id: conversation.id,
+      role: 'assistant',
+      content: input.content.trim()
+    });
+  }
+
+  return {};
+}
+
 export function sessionEndHook(input: { ide: IdeType; session_id: string; workspace: string | null; content: string; dbPath?: string }) {
   // D17: session end does not update recency.
   return { ok: true };

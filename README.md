@@ -1,6 +1,6 @@
 # ai-memory
 
-![Tests](https://img.shields.io/badge/tests-146%20passed-green) ![License](https://img.shields.io/badge/license-ISC-blue) ![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
+![License](https://img.shields.io/badge/license-ISC-blue) ![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
 
 **Conversation log and retrieval for AI coding assistants.**
 
@@ -64,7 +64,8 @@ You talk to AI ──→ ai-memory captures turns ──→ Next session starts 
 |------|-------------|
 | **Session start** | Creates/resumes conversation by external ID. Injects recent conversation titles + summaries (project-first, then other recent). |
 | **Prompt submit** | Captures user turn. First turn sets title (truncated to 80 chars) and initial summary (full first message). |
-| **Stop** | Captures assistant turn. |
+| **Stop** | Captures assistant turn (Claude Code: from `last_assistant_message`; Cursor: metadata-only). |
+| **After agent response** | Captures assistant turn from Cursor `stdin.text` (Cursor only). |
 | **Session end** | No-op (does not affect recency). |
 
 Hooks are fully deterministic — no LLM calls, no extraction, no scoring.
@@ -110,7 +111,7 @@ When your IDE supports [Model Context Protocol](https://modelcontextprotocol.io)
 | `ai-memory-conversations` | List recent conversations with titles and summaries |
 | `ai-memory-conversation` | Get full transcript for a conversation |
 | `ai-memory-summarize` | Update summary; optionally update title for the conversation |
-| `ai-memory-status` | Health check — conversation count, turn count, index status |
+| `ai-memory-status` | Health check — conversation count, turn count, index status, active warnings |
 
 These tools are called autonomously by the LLM. For user-triggered commands, ai-memory also registers MCP prompts that appear in the IDE `/` autocomplete:
 
@@ -245,7 +246,7 @@ ai-memory config get|set|list
 ai-memory clean-data [--dry-run] [--json]
 ai-memory dashboard [--port ...] [--no-open]
 ai-memory mcp
-ai-memory hook session-start|prompt-submit|stop|session-end --ide <ide>
+ai-memory hook session-start|prompt-submit|stop|afterAgentResponse|session-end --ide <ide>
 ```
 
 ---
@@ -273,12 +274,13 @@ ai-memory does not create project-local marker files.
 
 ### Schema
 
-Three tables + one FTS index:
+Five tables + one FTS index:
 
 - `conversations` — id, external_id, project_key, workspace, ide, source_path, source_mtime, title, summary, turn_count, started_at, updated_at
 - `turns` — id, conversation_id, role (`user|assistant|system`), content, content_hash, turn_number, created_at
 - `turns_fts` — FTS5 virtual table on turn content (BM25 search)
-- `tool_usage` — MCP tool telemetry (latency, result counts, success/error type) used by `ai-memory usage`
+- `tool_usage` — MCP and hook telemetry (latency, result counts, success/error type) used by `ai-memory usage`
+- `health_warnings` — integration health tracking (missing fields, config drift, empty captures) with upsert/resolve semantics
 
 ---
 
@@ -286,7 +288,7 @@ Three tables + one FTS index:
 
 ```bash
 npm run build:all # TypeScript + dashboard assets → dist/
-npm test          # 146 tests across 18 suites
+npm test          # 159 tests across 20 suites
 ```
 
 ### Project Structure

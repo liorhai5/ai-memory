@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { beforeSubmitPromptHook, sessionEndHook, sessionStartHook, stopHook } from '../../src/hooks/handlers.js';
+import { beforeSubmitPromptHook, sessionEndHook, sessionStartHook, stopHook, turnCompleteHook } from '../../src/hooks/handlers.js';
 import { createApp } from '../../src/app.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -135,5 +135,91 @@ describe('Hooks pipeline (D9)', () => {
     const app2 = createApp(dbPath);
     const afterEnd = app2.conversationStore.byExternalId('end-1')!.updated_at;
     expect(afterEnd).toBe(beforeEnd);
+  });
+});
+
+describe('turnCompleteHook (D039 Codex)', () => {
+  test('captures both user and assistant turns in one call', () => {
+    const dbPath = tempDbPath();
+    turnCompleteHook({
+      ide: 'codex',
+      session_id: 'codex-tc-1',
+      workspace: 'my-project',
+      prompt: 'how do I fix the build?',
+      content: 'Run npm install first.',
+      dbPath
+    });
+
+    const app = createApp(dbPath);
+    const conv = app.conversationStore.byExternalId('codex-tc-1')!;
+    expect(conv.ide).toBe('codex');
+    expect(conv.workspace).toBe('my-project');
+    const turns = app.conversationStore.listTurns(conv.id);
+    expect(turns.map(t => t.role)).toEqual(['user', 'assistant']);
+    expect(turns[0].content).toBe('how do I fix the build?');
+    expect(turns[1].content).toBe('Run npm install first.');
+  });
+
+  test('first turn sets title and summary', () => {
+    const dbPath = tempDbPath();
+    turnCompleteHook({
+      ide: 'codex',
+      session_id: 'codex-tc-title',
+      workspace: 'ws',
+      prompt: 'Refactor the authentication module to use JWT tokens',
+      content: 'Sure, here is the plan.',
+      dbPath
+    });
+
+    const app = createApp(dbPath);
+    const conv = app.conversationStore.byExternalId('codex-tc-title')!;
+    expect(conv.title).toBe('Refactor the authentication module to use JWT tokens');
+    expect(conv.summary).toBe('Refactor the authentication module to use JWT tokens');
+  });
+
+  test('multi-turn same thread appends turns via dedup', () => {
+    const dbPath = tempDbPath();
+    turnCompleteHook({
+      ide: 'codex',
+      session_id: 'codex-tc-multi',
+      workspace: 'ws',
+      prompt: 'first question',
+      content: 'first answer',
+      dbPath
+    });
+    turnCompleteHook({
+      ide: 'codex',
+      session_id: 'codex-tc-multi',
+      workspace: 'ws',
+      prompt: 'second question',
+      content: 'second answer',
+      dbPath
+    });
+
+    const app = createApp(dbPath);
+    const conv = app.conversationStore.byExternalId('codex-tc-multi')!;
+    const turns = app.conversationStore.listTurns(conv.id);
+    expect(turns.map(t => t.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    expect(turns[0].content).toBe('first question');
+    expect(turns[2].content).toBe('second question');
+    // Title stays as first prompt
+    expect(conv.title).toBe('first question');
+  });
+
+  test('skips empty prompt or content', () => {
+    const dbPath = tempDbPath();
+    turnCompleteHook({
+      ide: 'codex',
+      session_id: 'codex-tc-empty',
+      workspace: 'ws',
+      prompt: '',
+      content: 'assistant only',
+      dbPath
+    });
+
+    const app = createApp(dbPath);
+    const conv = app.conversationStore.byExternalId('codex-tc-empty')!;
+    const turns = app.conversationStore.listTurns(conv.id);
+    expect(turns.map(t => t.role)).toEqual(['assistant']);
   });
 });
