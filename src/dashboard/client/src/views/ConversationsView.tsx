@@ -143,11 +143,15 @@ export function ConversationsView({ active, onRefreshStateChange }: Conversation
   const [workspace, setWorkspace] = useState<string>(
     isConvView ? initHash.current.params.get('ws') ?? '' : ''
   );
+  const [ideFilter, setIdeFilter] = useState<string>(
+    isConvView ? initHash.current.params.get('ide') ?? '' : ''
+  );
   const [timeRange, setTimeRange] = useState<TimeRange>(
-    isConvView ? (initHash.current.params.get('time') as TimeRange) ?? '' : ''
+    isConvView ? (initHash.current.params.get('time') as TimeRange) ?? 'day' : 'day'
   );
   const [query, setQuery] = useState<string>(isConvView ? initHash.current.params.get('q') ?? '' : '');
   const [workspaces, setWorkspaces] = useState<string[]>([]);
+  const [ides, setIdes] = useState<string[]>([]);
   const [expandedTurns, setExpandedTurns] = useState<Set<string>>(new Set());
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -162,10 +166,11 @@ export function ConversationsView({ active, onRefreshStateChange }: Conversation
     writeHash('conversations', {
       id: selectedId ?? '',
       ws: workspace,
+      ide: ideFilter,
       time: timeRange,
       q: query,
     });
-  }, [active, selectedId, workspace, timeRange, query]);
+  }, [active, selectedId, workspace, ideFilter, timeRange, query]);
 
   // Handle incoming deep-links (e.g. from Search → "view conversation")
   useEffect(() => {
@@ -185,6 +190,9 @@ export function ConversationsView({ active, onRefreshStateChange }: Conversation
     rpc<{ workspaces: string[] }>('listWorkspaces', {})
       .then((res) => setWorkspaces(res.workspaces))
       .catch(() => {});
+    rpc<{ ides: string[] }>('listIdes', {})
+      .then((res) => setIdes(res.ides))
+      .catch(() => {});
   }, []);
 
   const loadConversations = useCallback(
@@ -193,6 +201,7 @@ export function ConversationsView({ active, onRefreshStateChange }: Conversation
       if (!append) setLoading(true);
       rpc<{ conversations: Conversation[]; total: number }>('listConversations', {
         workspace: workspace || undefined,
+        ide: ideFilter || undefined,
         date_from: timeRangeToIso(timeRange),
         limit: PAGE_SIZE,
         offset: nextOffset,
@@ -209,7 +218,7 @@ export function ConversationsView({ active, onRefreshStateChange }: Conversation
         .catch((e) => setError(String(e)))
         .finally(() => setLoading(false));
     },
-    [workspace, timeRange, offset]
+    [workspace, ideFilter, timeRange, offset]
   );
 
   const loadSelectedConversation = useCallback(async (conversationId: string) => {
@@ -236,6 +245,7 @@ export function ConversationsView({ active, onRefreshStateChange }: Conversation
     try {
       const res = await rpc<{ conversations: Conversation[]; total: number }>('listConversations', {
         workspace: workspace || undefined,
+        ide: ideFilter || undefined,
         date_from: timeRangeToIso(timeRange),
         limit: listLimit,
         offset: 0,
@@ -251,12 +261,12 @@ export function ConversationsView({ active, onRefreshStateChange }: Conversation
     } finally {
       setLoading(false);
     }
-  }, [items.length, workspace, timeRange, selectedId, loadSelectedConversation]);
+  }, [items.length, workspace, ideFilter, timeRange, selectedId, loadSelectedConversation]);
 
   useEffect(() => {
     setOffset(0);
     loadConversations(false);
-  }, [workspace, timeRange]);
+  }, [workspace, ideFilter, timeRange]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -329,6 +339,19 @@ export function ConversationsView({ active, onRefreshStateChange }: Conversation
         >
           {TIME_RANGES.map((t) => (
             <option key={t.value} value={t.value}>{t.label}</option>
+          ))}
+        </select>
+        <select
+          className="form-select"
+          value={ideFilter}
+          onChange={(e) => {
+            setIdeFilter(e.target.value);
+            setSelectedId(null);
+          }}
+        >
+          <option value="">All IDEs</option>
+          {ides.map((ide) => (
+            <option key={ide} value={ide}>{ide}</option>
           ))}
         </select>
         <select
@@ -483,6 +506,12 @@ export function ConversationsView({ active, onRefreshStateChange }: Conversation
                         {summaryExpanded ? '▲' : '▼'}
                       </button>
                     )}
+                  </div>
+                )}
+
+                {selectedConv.ide === 'codex' && selectedConv.turn_count > 2 && (
+                  <div className="codex-info-banner">
+                    Codex capture limitation: follow-up user prompts may be missing (turns 2+). Assistant responses are complete.
                   </div>
                 )}
 

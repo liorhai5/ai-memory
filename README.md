@@ -39,6 +39,7 @@ ai-memory init --ide all
 # Or initialize for a specific IDE
 ai-memory init --ide cursor
 ai-memory init --ide claude-code
+ai-memory init --ide codex
 
 # CLI-only (no IDE hooks)
 ai-memory init
@@ -47,7 +48,7 @@ ai-memory init
 ai-memory status
 ```
 
-This creates `~/.ai-memory/` (database + config), registers global hooks (session lifecycle), and adds the MCP server (LLM tools). Run once — it applies to all projects on this machine. Re-running is safe (idempotent).
+This creates `~/.ai-memory/` (database + config), registers global hooks (session lifecycle), adds the MCP server (LLM tools), and generates skill files (slash commands). Run once — it applies to all projects on this machine. Re-running is safe (idempotent).
 
 ---
 
@@ -66,6 +67,7 @@ You talk to AI ──→ ai-memory captures turns ──→ Next session starts 
 | **Prompt submit** | Captures user turn. First turn sets title (truncated to 80 chars) and initial summary (full first message). |
 | **Stop** | Captures assistant turn (Claude Code: from `last_assistant_message`; Cursor: metadata-only). |
 | **After agent response** | Captures assistant turn from Cursor `stdin.text` (Cursor only). |
+| **Turn complete** | Captures both user + assistant turns in one call (Codex only, via `notify`). |
 | **Session end** | No-op (does not affect recency). |
 
 Hooks are fully deterministic — no LLM calls, no extraction, no scoring.
@@ -113,14 +115,16 @@ When your IDE supports [Model Context Protocol](https://modelcontextprotocol.io)
 | `ai-memory-summarize` | Update summary; optionally update title for the conversation |
 | `ai-memory-status` | Health check — conversation count, turn count, index status, active warnings |
 
-These tools are called autonomously by the LLM. For user-triggered commands, ai-memory also registers MCP prompts that appear in the IDE `/` autocomplete:
+These tools are called autonomously by the LLM. For user-triggered commands, `ai-memory init` generates IDE skill files that appear in the `/` autocomplete:
 
-| Prompt | Trigger | What it does |
-|--------|---------|-------------|
-| `status` | `/mcp__ai-memory__status` | Quick health check |
-| `search` | `/mcp__ai-memory__search` | Search with a query argument |
-| `recent` | `/mcp__ai-memory__recent` | Last 10 conversations overview |
-| `summarize` | `/mcp__ai-memory__summarize` | Ask the LLM to summarize and save |
+| Skill | Trigger | What it does |
+|-------|---------|-------------|
+| `ai-memory-status` | `/ai-memory-status` | Quick health check |
+| `ai-memory-search` | `/ai-memory-search <query>` | Search with a query argument |
+| `ai-memory-recent` | `/ai-memory-recent` | Last 10 conversations overview |
+| `ai-memory-summarize` | `/ai-memory-summarize` | Ask the LLM to summarize and save |
+
+Skills are written to `~/.<ide>/skills/ai-memory-*/SKILL.md` per IDE (Codex uses `~/.agents/skills/`) and work in Cursor, Claude Code, and Codex.
 
 MCP is auto-configured by `ai-memory init --ide <name>`. The init command registers the MCP server globally:
 
@@ -128,6 +132,7 @@ MCP is auto-configured by `ai-memory init --ide <name>`. The init command regist
 |-----|-------------------|
 | Cursor | `~/.cursor/mcp.json` |
 | Claude Code | `~/.claude/settings.json` |
+| Codex | `~/.codex/config.toml` (`notify` entry — capture only, no MCP) |
 
 <details>
 <summary>Manual setup (if not using init)</summary>
@@ -233,7 +238,7 @@ Import is idempotent — safe to rerun. Conversations are deduped by `external_i
 ## CLI Reference
 
 ```
-ai-memory init [--ide cursor|claude-code|all] [--reset-db]
+ai-memory init [--ide cursor|claude-code|codex|all] [--reset-db]
 ai-memory status [--json]
 ai-memory search <text> [--workspace ...] [--from ...] [--to ...] [--role ...] [--limit ...] [--offset ...] [--json]
 ai-memory conversations [--workspace ...] [--from ...] [--to ...] [--limit ...] [--offset ...] [--json]
@@ -246,7 +251,7 @@ ai-memory config get|set|list
 ai-memory clean-data [--dry-run] [--json]
 ai-memory dashboard [--port ...] [--no-open]
 ai-memory mcp
-ai-memory hook session-start|prompt-submit|stop|afterAgentResponse|session-end --ide <ide>
+ai-memory hook session-start|prompt-submit|stop|afterAgentResponse|turn-complete|session-end --ide <ide>
 ```
 
 ---
@@ -288,7 +293,7 @@ Five tables + one FTS index:
 
 ```bash
 npm run build:all # TypeScript + dashboard assets → dist/
-npm test          # 159 tests across 20 suites
+npm test          # 176 tests across 20 suites
 ```
 
 ### Project Structure
@@ -297,7 +302,7 @@ npm test          # 159 tests across 20 suites
 src/
 ├── cli.ts                            CLI entry point
 ├── app.ts                            Application context (wires all services)
-├── types.ts                          Core types (Conversation, Turn, SearchParams)
+├── types.ts                          Core types (Conversation, Turn, SearchParams, IdeType)
 ├── db/
 │   ├── schema.ts                     SQLite schema (conversations, turns, turns_fts)
 │   └── connection.ts                 Database connection and migration
@@ -311,8 +316,8 @@ src/
 │   ├── usage-service.ts              MCP usage analytics
 │   └── config-service.ts             Configuration management
 ├── hooks/
-│   ├── handlers.ts                   IDE hook handlers (deterministic capture + injection)
-│   └── init-config.ts                IDE config file generation
+│   ├── handlers.ts                   IDE hook handlers (session-start, prompt-submit, stop, turn-complete)
+│   └── init-config.ts                IDE config + skill file generation
 ├── mcp/
 │   ├── server.ts                     MCP tool handlers
 │   └── stdio.ts                      MCP stdio transport + tool registration

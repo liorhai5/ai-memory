@@ -15,7 +15,7 @@ interface StatusPayload {
   };
   data_coverage: {
     by_ide: Array<{ ide: string; count: number }>;
-    by_workspace_top: Array<{ project_key: string; workspace: string; count: number }>;
+    by_workspace_top: Array<{ workspace: string; count: number }>;
     oldest_started_at: string | null;
     latest_updated_at: string | null;
     last_24h_conversations: number;
@@ -44,6 +44,17 @@ interface StatusPayload {
       registry_mcp_configured: boolean;
       mcp_configured: boolean;
     };
+    codex: {
+      config_file: string;
+      config_exists: boolean;
+      notify_configured: boolean;
+      mcp_configured: boolean;
+      config_parse_error: string | null;
+    };
+  };
+  skills: {
+    expected: string[];
+    by_ide: Record<string, { installed: number; total: number; missing: string[] }>;
   };
   config_snapshot: {
     injection_max_conversations: number;
@@ -55,6 +66,7 @@ interface StatusPayload {
     config_exists: boolean;
     config_mtime: string | null;
   };
+  warnings: Array<{ category: string; message: string; first_seen_at: string; last_seen_at: string }>;
   runtime: {
     last_ingest_at: string | null;
     last_error: string | null;
@@ -140,6 +152,19 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
 
       {data && (
         <div className="status-body">
+          {data.warnings.length > 0 && (
+            <Section title="Health Warnings">
+              <div className="status-warnings">
+                {data.warnings.map((w, i) => (
+                  <div key={i} className="status-warning-row">
+                    <span className="status-badge warn">{w.category}</span>
+                    <span>{w.message}</span>
+                    <span className="status-mono status-warning-date">since {formatDate(w.first_seen_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
           <Section title="System Health">
             <div className="status-grid">
               <div className="status-card">
@@ -197,7 +222,7 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
               <div className="status-card">
                 <div className="status-card-k">Top workspaces</div>
                 {data.data_coverage.by_workspace_top.map((row) => (
-                  <div key={row.project_key} className="status-list-row">
+                  <div key={row.workspace} className="status-list-row">
                     <span>{formatWorkspace(row.workspace)}</span>
                     <span className="status-mono">{row.count}</span>
                   </div>
@@ -207,7 +232,7 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
           </Section>
 
           <Section title="IDE Integrations">
-            <div className="status-two-col">
+            <div className="status-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
               <div className="status-card">
                 <div className="status-card-k">Cursor</div>
                 <div className="status-list-row"><span>Hooks file exists</span><BoolBadge ok={data.integrations.cursor.hooks_file_exists} /></div>
@@ -235,6 +260,33 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
                 {data.integrations.claude_code.settings_parse_error && <div className="status-warn">{data.integrations.claude_code.settings_parse_error}</div>}
                 {data.integrations.claude_code.registry_parse_error && <div className="status-warn">{data.integrations.claude_code.registry_parse_error}</div>}
               </div>
+              <div className="status-card">
+                <div className="status-card-k">Codex</div>
+                <div className="status-list-row"><span>Config exists</span><BoolBadge ok={data.integrations.codex.config_exists} /></div>
+                <div className="status-list-row"><span>Notify configured</span><BoolBadge ok={data.integrations.codex.notify_configured} /></div>
+                <div className="status-list-row"><span>MCP configured</span><BoolBadge ok={data.integrations.codex.mcp_configured} /></div>
+                <div className="status-mono status-path">{data.integrations.codex.config_file}</div>
+                {data.integrations.codex.config_parse_error && <div className="status-warn">{data.integrations.codex.config_parse_error}</div>}
+              </div>
+            </div>
+          </Section>
+
+          <Section title="Skills">
+            <div className="status-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+              {Object.entries(data.skills.by_ide).map(([ide, info]) => (
+                <div key={ide} className="status-card">
+                  <div className="status-card-k">{ide.replace('_', ' ')}</div>
+                  <div className="status-list-row">
+                    <span>Installed</span>
+                    <span className="status-mono">{info.installed}/{info.total}</span>
+                  </div>
+                  {info.missing.length > 0 && (
+                    <div className="status-note" style={{ color: 'var(--accent-yellow)' }}>
+                      Missing: {info.missing.join(', ')}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </Section>
 
@@ -262,11 +314,11 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
           <Section title="Usage Summary">
             <div className="status-grid">
               <div className="status-card">
-                <div className="status-card-k">MCP calls (24h)</div>
+                <div className="status-card-k">Operations (24h)</div>
                 <div className="status-big">{data.usage_summary.tool_calls_24h}</div>
               </div>
               <div className="status-card">
-                <div className="status-card-k">MCP calls (7d)</div>
+                <div className="status-card-k">Operations (7d)</div>
                 <div className="status-big">{data.usage_summary.tool_calls_7d}</div>
               </div>
               <div className="status-card">

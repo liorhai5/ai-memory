@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-export type UsageRange = '24h' | '7d' | '30d';
+export type UsageRange = '24h' | '7d' | '30d' | 'day' | 'week' | 'month' | 'year' | '';
 
 export interface UsageSummary {
   range: UsageRange;
@@ -35,10 +35,14 @@ export interface UsageDashboardData {
   }>;
 }
 
-const RANGE_TO_MS: Record<UsageRange, number> = {
+const RANGE_TO_MS: Record<string, number> = {
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000,
-  '30d': 30 * 24 * 60 * 60 * 1000
+  '30d': 30 * 24 * 60 * 60 * 1000,
+  day: 24 * 60 * 60 * 1000,
+  week: 7 * 24 * 60 * 60 * 1000,
+  month: 30 * 24 * 60 * 60 * 1000,
+  year: 365 * 24 * 60 * 60 * 1000,
 };
 
 function round2(n: number): number {
@@ -46,15 +50,18 @@ function round2(n: number): number {
 }
 
 export function parseUsageRange(value: unknown): UsageRange {
-  if (value === '24h' || value === '7d' || value === '30d') return value;
-  return '7d';
+  if (typeof value === 'string' && value in RANGE_TO_MS) return value as UsageRange;
+  if (value === '') return '';
+  return 'day';
 }
 
 export class UsageService {
   constructor(private readonly db: Database.Database) {}
 
   getUsageSummary(range: UsageRange): UsageSummary {
-    const since = new Date(Date.now() - RANGE_TO_MS[range]).toISOString();
+    const since = range && RANGE_TO_MS[range]
+      ? new Date(Date.now() - RANGE_TO_MS[range]).toISOString()
+      : '1970-01-01T00:00:00Z';
     const row = this.db
       .prepare(
         `
@@ -98,7 +105,7 @@ export class UsageService {
     const generatedAt = new Date().toISOString();
     const summary = this.getUsageSummary(range);
     const since = summary.window_start;
-    const bucketExpr = range === '24h' ? `substr(called_at, 1, 13) || ':00:00Z'` : `substr(called_at, 1, 10)`;
+    const bucketExpr = (range === '24h' || range === 'day') ? `substr(called_at, 1, 13) || ':00:00Z'` : `substr(called_at, 1, 10)`;
 
     const timeSeries = this.db
       .prepare(
