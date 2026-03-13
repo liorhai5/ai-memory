@@ -6,6 +6,7 @@ import { StatusView } from './views/StatusView';
 import { UsageView } from './views/UsageView';
 import { readHash } from './url-state';
 import { type ViewRefreshState } from './refresh';
+import { rpc } from './rpc';
 
 type View = 'conversations' | 'search' | 'injection' | 'status' | 'usage';
 
@@ -70,6 +71,28 @@ const NAV_ITEMS: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: 'usage', label: 'Usage', icon: <UsageIcon /> },
 ];
 
+function WarningsBanner({ onNavigate }: { onNavigate: (v: View) => void }) {
+  const [count, setCount] = useState(0);
+  const [dismissed, setDismissed] = useState(() => sessionStorage.getItem('warnings-dismissed') === '1');
+
+  useEffect(() => {
+    if (dismissed) return;
+    rpc<{ warnings: Array<unknown> }>('getDashboardStatus', {}).then((res) => {
+      setCount(res.warnings?.length ?? 0);
+    }).catch(() => {});
+  }, [dismissed]);
+
+  if (dismissed || count === 0) return null;
+
+  return (
+    <div className="warnings-banner">
+      <span>{count} health warning{count > 1 ? 's' : ''} active</span>
+      <button className="btn btn-sm" onClick={() => onNavigate('status')}>View</button>
+      <button className="btn btn-sm btn-ghost" onClick={() => { setDismissed(true); sessionStorage.setItem('warnings-dismissed', '1'); }}>Dismiss</button>
+    </div>
+  );
+}
+
 export function App() {
   const [view, setView] = useState<View>(() => (readHash().view as View) || 'conversations');
   const [refreshByView, setRefreshByView] = useState<Partial<Record<View, ViewRefreshState>>>({});
@@ -126,6 +149,7 @@ export function App() {
           {refreshingHeader || activeRefresh?.isRefreshing ? 'Refreshing...' : 'Refresh'}
         </button>
       </header>
+      <WarningsBanner onNavigate={navigate} />
       <div className="app-body">
         <nav className="sidebar">
           {NAV_ITEMS.map((item) => (

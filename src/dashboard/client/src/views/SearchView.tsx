@@ -73,7 +73,7 @@ export function SearchView({ active, onRefreshStateChange }: SearchViewProps) {
   const [workspace, setWorkspace] = useState(isSearchView ? initHash.current.params.get('ws') ?? '' : '');
   const [role, setRole] = useState(isSearchView ? initHash.current.params.get('role') ?? '' : '');
   const [timeRange, setTimeRange] = useState<TimeRange>(
-    isSearchView ? (initHash.current.params.get('time') as TimeRange) ?? '' : ''
+    isSearchView ? (initHash.current.params.get('time') as TimeRange) ?? 'day' : 'day'
   );
   const [workspaces, setWorkspaces] = useState<string[]>([]);
   const [items, setItems] = useState<SearchItem[]>([]);

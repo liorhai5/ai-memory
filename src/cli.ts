@@ -8,7 +8,7 @@ import { createApp } from './app.js';
 import { getConfigValue, setConfigValue, loadConfig, saveConfig } from './services/config-service.js';
 import { beforeSubmitPromptHook, sessionStartHook, stopHook, sessionEndHook, turnCompleteHook } from './hooks/handlers.js';
 import { deriveProjectKey, normalizeWorkspaceLabel } from './utils/workspace-identity.js';
-import { generateInitConfig, checkHookPresence } from './hooks/init-config.js';
+import { generateInitConfig, generateCodexConfig, checkHookPresence, writeSkills } from './hooks/init-config.js';
 import { stripPromptWrappers } from './utils/strip.js';
 import type { IdeType } from './types.js';
 import { newId } from './utils/id.js';
@@ -78,14 +78,14 @@ program.name('ai-memory').description('ai-memory conversation memory CLI').versi
 
 program
   .command('init')
-  .option('--ide <ide>', 'Generate IDE hook config: cursor | claude-code | all')
+  .option('--ide <ide>', 'Generate IDE hook config: cursor | claude-code | codex | all')
   .option('--reset-db', 'Backup old DB and reset to new schema')
   .option('--json')
   .action((opts) => {
     const home = homedir();
     const aiMemoryDir = join(home, '.ai-memory');
     const servicesDir = join(aiMemoryDir, 'services');
-    const phases: { phase: string; path: string; status: 'created' | 'exists' }[] = [];
+    const phases: { phase: string; path: string; status: 'created' | 'updated' | 'exists' }[] = [];
 
     // Phase 1: Directory structure
     for (const dir of [aiMemoryDir, servicesDir]) {
@@ -116,10 +116,16 @@ program
     if (opts.ide === 'all') {
       if (existsSync(join(home, '.cursor'))) ides.push('cursor');
       if (existsSync(join(home, '.claude'))) ides.push('claude-code');
+      if (existsSync(join(home, '.codex'))) ides.push('codex');
       if (ides.length === 0) {
         phases.push({ phase: 'ide-detection', path: home, status: 'exists' });
       }
     } else if (opts.ide) {
+      const validIdes = ['cursor', 'claude-code', 'codex'] as const;
+      if (!validIdes.includes(opts.ide)) {
+        console.error(`Error: unknown IDE "${opts.ide}". Valid options: ${validIdes.join(', ')}, all`);
+        process.exit(1);
+      }
       ides = [opts.ide as IdeType];
     }
 
@@ -136,6 +142,20 @@ program
         phases.push({ phase: 'hooks+mcp', path: settingsPath, status: 'created' });
         const runtimeMcp = syncClaudeRuntimeMcp(home);
         phases.push({ phase: 'mcp-runtime', path: runtimeMcp.path, status: runtimeMcp.status });
+      } else if (ide === 'codex') {
+        const configPath = join(home, '.codex/config.toml');
+        const codexResult = generateCodexConfig(configPath);
+        phases.push({ phase: 'notify', path: configPath, status: codexResult.status });
+      }
+
+      // D040: Write skill files for slash command support
+      const skills = writeSkills(ide, home);
+      const skillBase = ide === 'codex' ? '~/.agents/skills' : `~/.${ide === 'claude-code' ? 'claude' : ide}/skills`;
+      for (const name of skills.written) {
+        phases.push({ phase: 'skill', path: `${skillBase}/${name}/SKILL.md`, status: 'created' });
+      }
+      for (const name of skills.skipped) {
+        phases.push({ phase: 'skill', path: `${skillBase}/${name}/SKILL.md`, status: 'exists' });
       }
     }
 

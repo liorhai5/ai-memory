@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { rpc } from '../rpc';
 import { type RefreshStateChange } from '../refresh';
-
-type UsageRange = '24h' | '7d' | '30d';
+import { TIME_RANGES, type TimeRange } from '../workspace-colors';
 
 interface UsageDashboardPayload {
   generated_at: string;
   summary: {
-    range: UsageRange;
+    range: string;
     total_calls: number;
     error_rate: number;
     empty_search_rate: number;
@@ -19,16 +18,9 @@ interface UsageDashboardPayload {
     calls: number;
     errors: number;
     avg_latency_ms: number;
-    empty_results: number;
   }>;
   errors_by_type: Array<{ error_type: string; count: number }>;
 }
-
-const RANGE_OPTIONS: Array<{ value: UsageRange; label: string }> = [
-  { value: '24h', label: '24h' },
-  { value: '7d', label: '7d' },
-  { value: '30d', label: '30d' }
-];
 
 interface UsageViewProps {
   active: boolean;
@@ -51,7 +43,7 @@ function formatBucketLabel(bucket: string): string {
 }
 
 export function UsageView({ active, onRefreshStateChange }: UsageViewProps) {
-  const [range, setRange] = useState<UsageRange>('7d');
+  const [range, setRange] = useState<TimeRange>('day');
   const [toolSort, setToolSort] = useState<ToolSort>('calls-desc');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,8 +115,8 @@ export function UsageView({ active, onRefreshStateChange }: UsageViewProps) {
         <span className="toolbar-title">Usage</span>
         {data?.generated_at && <span className="toolbar-meta">Snapshot: {data.generated_at}</span>}
         <span className="toolbar-spacer" />
-        <select className="form-select" value={range} onChange={(e) => setRange(e.target.value as UsageRange)}>
-          {RANGE_OPTIONS.map((option) => (
+        <select className="form-select" value={range} onChange={(e) => setRange(e.target.value as TimeRange)}>
+          {TIME_RANGES.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
@@ -168,7 +160,7 @@ export function UsageView({ active, onRefreshStateChange }: UsageViewProps) {
           <div className="usage-card">
             <div className="usage-card-k">Calls over time</div>
             {data.time_series.length === 0 ? (
-              <div className="status-note">No MCP usage in this period.</div>
+              <div className="status-note">No usage data in this period.</div>
             ) : (
               <div className="usage-timeseries-list">
                 {data.time_series.map((row) => (
@@ -199,7 +191,7 @@ export function UsageView({ active, onRefreshStateChange }: UsageViewProps) {
               </select>
             </div>
             {data.by_tool.length === 0 ? (
-              <div className="status-note">No MCP usage in this period.</div>
+              <div className="status-note">No usage data in this period.</div>
             ) : (
               <table className="usage-table">
                 <thead>
@@ -209,14 +201,12 @@ export function UsageView({ active, onRefreshStateChange }: UsageViewProps) {
                     <th>share</th>
                     <th>avg ms</th>
                     <th>error %</th>
-                    <th>empty %</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedTools.map((row) => {
                     const share = totalFromTools > 0 ? row.calls / totalFromTools : 0;
                     const errorRate = row.calls > 0 ? row.errors / row.calls : 0;
-                    const emptyRate = row.tool_name === 'ai-memory-search' && row.calls > 0 ? row.empty_results / row.calls : null;
                     return (
                       <tr key={row.tool_name}>
                         <td className="status-mono">{row.tool_name}</td>
@@ -224,7 +214,6 @@ export function UsageView({ active, onRefreshStateChange }: UsageViewProps) {
                         <td>{kpiPct(share)}</td>
                         <td>{row.avg_latency_ms}</td>
                         <td>{kpiPct(errorRate)}</td>
-                        <td>{emptyRate == null ? '-' : kpiPct(emptyRate)}</td>
                       </tr>
                     );
                   })}

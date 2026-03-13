@@ -25,6 +25,8 @@ export function handleRpc(
         return { ok: true, result: searchConversations(ctx, params) };
       case 'listWorkspaces':
         return { ok: true, result: listWorkspaces(ctx) };
+      case 'listIdes':
+        return { ok: true, result: listIdes(ctx) };
       case 'setSummary':
         return { ok: true, result: setSummary(ctx, params) };
       case 'simulateInjection':
@@ -54,6 +56,7 @@ function listConversations(ctx: AppContext, params: Record<string, unknown>) {
   const offset = Number(params.offset ?? 0);
   const workspace = (params.workspace as string | undefined) ?? undefined;
   const dateFrom = (params.date_from as string | undefined) ?? undefined;
+  const ide = (params.ide as string | undefined) ?? undefined;
 
   const where: string[] = [];
   const args: unknown[] = [];
@@ -65,6 +68,10 @@ function listConversations(ctx: AppContext, params: Record<string, unknown>) {
   if (dateFrom) {
     where.push('updated_at >= ?');
     args.push(dateFrom);
+  }
+  if (typeof ide !== 'undefined') {
+    where.push('ide IS ?');
+    args.push(ide);
   }
   const clause = where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '';
 
@@ -107,6 +114,13 @@ function listWorkspaces(ctx: AppContext) {
     .prepare(`SELECT DISTINCT workspace FROM conversations WHERE workspace IS NOT NULL ORDER BY workspace`)
     .all() as Array<{ workspace: string }>;
   return { workspaces: rows.map((r) => r.workspace) };
+}
+
+function listIdes(ctx: AppContext) {
+  const rows = ctx.db
+    .prepare(`SELECT DISTINCT ide FROM conversations WHERE ide IS NOT NULL ORDER BY ide`)
+    .all() as Array<{ ide: string }>;
+  return { ides: rows.map((r) => r.ide) };
 }
 
 function simulateInjection(ctx: AppContext, params: Record<string, unknown>) {
@@ -175,6 +189,15 @@ function hasGroupedHookCommand(entries: any, cmd: string, matcher?: string): boo
   });
 }
 
+function readRawFile(path: string): { exists: boolean; content: string | null; error: string | null } {
+  if (!existsSync(path)) return { exists: false, content: null, error: null };
+  try {
+    return { exists: true, content: readFileSync(path, 'utf8'), error: null };
+  } catch (err) {
+    return { exists: true, content: null, error: String(err) };
+  }
+}
+
 function buildIntegrationStatus() {
   const home = homedir();
   const cursorHooksPath = join(home, '.cursor', 'hooks.json');
@@ -204,6 +227,11 @@ function buildIntegrationStatus() {
     Stop: 'ai-memory hook stop --ide claude-code',
     SessionEnd: 'ai-memory hook session-end --ide claude-code'
   };
+
+  // D041: Codex integration check
+  const codexConfigPath = join(home, '.codex', 'config.toml');
+  const codexConfig = readRawFile(codexConfigPath);
+  const codexNotifyConfigured = Boolean(codexConfig.content && /^notify\s*=.*ai-memory/m.test(codexConfig.content));
 
   return {
     cursor: {
@@ -241,8 +269,39 @@ function buildIntegrationStatus() {
       registry_parse_error: claudeRegistry.error,
       registry_mcp_configured: Boolean(claudeRegistry.json?.mcpServers?.['ai-memory']),
       mcp_configured: Boolean(claudeSettings.json?.mcpServers?.['ai-memory']) && Boolean(claudeRegistry.json?.mcpServers?.['ai-memory'])
+    },
+    codex: {
+      config_file: codexConfigPath,
+      config_exists: codexConfig.exists,
+      notify_configured: codexNotifyConfigured,
+      mcp_configured: Boolean(codexConfig.content && codexConfig.content.includes('[mcp_servers.ai-memory]')),
+      config_parse_error: codexConfig.error
     }
   };
+}
+
+const EXPECTED_SKILLS = ['ai-memory-status', 'ai-memory-search', 'ai-memory-recent', 'ai-memory-summarize'];
+
+function buildSkillsStatus() {
+  const home = homedir();
+  const ideDirs: Array<{ ide: string; dir: string }> = [
+    { ide: 'claude_code', dir: join(home, '.claude', 'skills') },
+    { ide: 'cursor', dir: join(home, '.cursor', 'skills') },
+    { ide: 'codex', dir: join(home, '.agents', 'skills') },
+  ];
+
+  const byIde: Record<string, { installed: number; total: number; missing: string[] }> = {};
+  for (const { ide, dir } of ideDirs) {
+    const missing: string[] = [];
+    for (const skill of EXPECTED_SKILLS) {
+      if (!existsSync(join(dir, skill, 'SKILL.md'))) {
+        missing.push(skill);
+      }
+    }
+    byIde[ide] = { installed: EXPECTED_SKILLS.length - missing.length, total: EXPECTED_SKILLS.length, missing };
+  }
+
+  return { expected: EXPECTED_SKILLS, by_ide: byIde };
 }
 
 function getDashboardStatus(ctx: AppContext) {
@@ -258,15 +317,14 @@ function getDashboardStatus(ctx: AppContext) {
   const byWorkspaceRows = ctx.db.prepare(
     `
     SELECT
-      COALESCE(project_key, 'unassigned') AS project_key,
-      COALESCE(MAX(workspace), 'global') AS workspace,
+      COALESCE(workspace, 'global') AS workspace,
       COUNT(*) AS count
     FROM conversations
-    GROUP BY COALESCE(project_key, 'unassigned')
+    GROUP BY COALESCE(workspace, 'global')
     ORDER BY count DESC
     LIMIT 10
     `
-  ).all() as Array<{ project_key: string; workspace: string; count: number }>;
+  ).all() as Array<{ workspace: string; count: number }>;
 
   const range = ctx.db.prepare(
     `SELECT MIN(started_at) AS oldest_started_at, MAX(updated_at) AS latest_updated_at FROM conversations`
@@ -304,6 +362,7 @@ function getDashboardStatus(ctx: AppContext) {
       last_7d_conversations: c7.c
     },
     integrations: buildIntegrationStatus(),
+    skills: buildSkillsStatus(),
     config_snapshot: {
       ...ctx.config,
       config_path: configPath,

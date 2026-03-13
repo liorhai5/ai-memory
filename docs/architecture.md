@@ -55,7 +55,7 @@ Four adapters (IDE Hooks, CLI, MCP, Dashboard) are wrappers over `AppContext`. T
 src/
 ├── cli.ts                    CLI entry point (Commander)
 ├── app.ts                    AppContext factory — wires DB, config, stores, services
-├── types.ts                  Core types: Conversation, Turn, SearchParams
+├── types.ts                  Core types: Conversation, Turn, SearchParams, IdeType (cursor|claude-code|codex|cli)
 ├── db/
 │   ├── schema.ts             DDL: conversations, turns, turns_fts (FTS5), tool_usage, health_warnings
 │   └── connection.ts         DB creation + column migrations
@@ -69,11 +69,11 @@ src/
 │   ├── usage-service.ts      MCP tool usage analytics and dashboard data
 │   └── config-service.ts     Load/save config from ~/.ai-memory/config.json
 ├── hooks/
-│   ├── handlers.ts           IDE hook handlers (session-start, prompt-submit, stop)
-│   └── init-config.ts        IDE config file generation
+│   ├── handlers.ts           IDE hook handlers (session-start, prompt-submit, stop, turn-complete)
+│   └── init-config.ts        IDE config file generation + skill file generation
 ├── mcp/
 │   ├── server.ts             MCP tool handler map (5 tools)
-│   └── stdio.ts              MCP stdio transport + tool/prompt registration
+│   └── stdio.ts              MCP stdio transport + tool registration
 ├── dashboard/
 │   ├── server.ts             HTTP server — static SPA + /rpc endpoint
 │   ├── rpc.ts                RPC method dispatch (listConversations, search, etc.)
@@ -245,6 +245,14 @@ IDE hook (prompt-submit / stop / afterAgentResponse)
     → INSERT OR REPLACE into turns_fts (sync FTS index)
     → UPDATE conversations.turn_count, updated_at
   → On first user turn: setTitleIfEmpty() + upsertSummary()
+
+Codex turn-complete (notify → DB):
+  → cli.ts: parse argv JSON → parseIdeStdin('codex', raw) → typed HookPayload
+  → filter: skip system/title-generation turns
+  → handlers.ts: turnCompleteHook()
+  → ConversationStore.upsertConversationByExternalId()
+  → ConversationStore.addTurn() × 2 (user + assistant, each deduped by content_hash)
+  → On first user turn: setTitleIfEmpty() + upsertSummary()
 ```
 
 ### 2. Injection (session start → context)
@@ -303,6 +311,7 @@ The hooks adapter captures conversations and injects context via IDE lifecycle e
 | `beforeSubmitPromptHook` | `prompt-submit` | `UserPromptSubmit` | `beforeSubmitPrompt` | Capture user turn, auto-title on first turn |
 | `stopHook` | `stop` | `Stop` | `stop` | CC: capture assistant turn from `last_assistant_message`. Cursor: metadata-only (no content capture) |
 | `stopHook` (via afterAgentResponse) | `afterAgentResponse` | N/A | `afterAgentResponse` | Cursor only: capture assistant turn from `stdin.text` |
+| `turnCompleteHook` | `turn-complete` | N/A | N/A | Codex only: capture both user + assistant turns from `notify` argv payload |
 | `sessionEndHook` | `session-end` | `SessionEnd` | `sessionEnd` | No-op |
 
 All hooks receive `project_key` (derived from workspace path) for stable project identity across sessions. Each hook invocation is recorded in the `tool_usage` table with `hook:<event>` naming for observability.
@@ -313,7 +322,7 @@ All hook CLI commands wrap in try/catch, write errors to stderr, and `exit(0)`. 
 
 #### Init Config (`hooks/init-config.ts`)
 
-Generates IDE-specific hook and MCP configuration files. For Claude Code, old flat-format ai-memory entries are automatically stripped and replaced with the grouped format:
+Generates IDE-specific hook and MCP configuration files, and writes skill files for slash command support. For Claude Code, old flat-format ai-memory entries are automatically stripped and replaced with the grouped format:
 
 - **Cursor**: flat hook entries in `~/.cursor/hooks.json`, MCP in separate `~/.cursor/mcp.json`
 - **Claude Code**: grouped matcher entries in `~/.claude/settings.json` with nested hooks arrays:
@@ -321,6 +330,7 @@ Generates IDE-specific hook and MCP configuration files. For Claude Code, old fl
   { "matcher": "startup|resume|clear|compact", "hooks": [{ "type": "command", "command": "..." }] }
   ```
   SessionStart hooks use a matcher so injection runs on startup, resume, clear, and compact events.
+- **Codex**: `notify` entry in `~/.codex/config.toml` (fire-and-forget, no hooks/MCP config needed)
 
 ### CLI (`cli.ts`)
 
@@ -354,10 +364,11 @@ Multi-phase setup command. Phases run in order:
 1. **Directories** — create `~/.ai-memory/` and `~/.ai-memory/services/`
 2. **Database** — create SQLite DB (optional `--reset-db` backs up existing DB first)
 3. **Config** — write `~/.ai-memory/config.json` with defaults if missing
-4. **IDE hooks + MCP** — register hooks and MCP server for selected IDE(s)
-5. **Validation** — `checkHookPresence()` verifies registered hooks are present in config files. Reports per-IDE pass/fail. Missing hooks are recorded as `init_drift` warnings.
+4. **IDE hooks + MCP** — register hooks and MCP server for selected IDE(s); for Codex, writes `notify` to `~/.codex/config.toml`
+5. **Skills** — write `SKILL.md` files for slash command support (`~/.<ide>/skills/ai-memory-*/` for Cursor/Claude Code, `~/.agents/skills/ai-memory-*/` for Codex)
+6. **Validation** — `checkHookPresence()` verifies registered hooks are present in config files. Reports per-IDE pass/fail. Missing hooks are recorded as `init_drift` warnings.
 
-`--ide all` auto-detects installed IDEs by checking for `~/.cursor` and `~/.claude` directories. Init is idempotent and self-repairing — re-running it on an existing installation detects and fixes drifted configs.
+`--ide all` auto-detects installed IDEs by checking for `~/.cursor`, `~/.claude`, and `~/.codex` directories. Init is idempotent and self-repairing — re-running it on an existing installation detects and fixes drifted configs.
 
 For Claude Code, MCP registration is dual-path:
 - `~/.claude/settings.json` — declarative MCP entry (used by hooks config)
@@ -367,18 +378,19 @@ For Claude Code, MCP registration is dual-path:
 
 Hook subcommands receive context from the IDE via stdin JSON. `parseIdeStdin(ide, raw, cliOpts)` maps IDE-specific fields to a typed `HookPayload`:
 
-| Field | Claude Code stdin | Cursor stdin |
-|-------|------------------|--------------|
-| `sessionId` | `session_id` | `conversation_id` |
-| `workspace` | `basename(cwd)` | `basename(workspace_roots[0])` |
-| `workspacePath` | `cwd` | `workspace_roots[0]` |
-| `assistantContent` (stop) | `last_assistant_message` | N/A (metadata only) |
-| `assistantContent` (afterAgentResponse) | N/A | `text` |
-| `prompt` | `prompt` | `prompt` |
+| Field | Claude Code stdin | Cursor stdin | Codex notify (argv) |
+|-------|------------------|--------------|---------------------|
+| `sessionId` | `session_id` | `conversation_id` | `thread-id` |
+| `workspace` | `basename(cwd)` | `basename(workspace_roots[0])` | `basename(cwd)` |
+| `workspacePath` | `cwd` | `workspace_roots[0]` | `cwd` |
+| `assistantContent` (stop) | `last_assistant_message` | N/A (metadata only) | N/A |
+| `assistantContent` (afterAgentResponse) | N/A | `text` | N/A |
+| `assistantContent` (turn-complete) | N/A | N/A | `last-assistant-message` |
+| `prompt` | `prompt` | `prompt` | `input-messages[0]` |
 
 Each IDE has exactly one known field per datum — no fallback chains. Missing expected fields emit structured warnings to the `health_warnings` table.
 
-Output format varies: Claude Code hooks emit plain text, Cursor hooks emit JSON.
+Output format varies: Claude Code hooks emit plain text, Cursor hooks emit JSON. Codex hooks are fire-and-forget (no output — `notify` system is one-way).
 
 #### Phantom Hook Detection
 
@@ -402,16 +414,16 @@ Detection uses `hook_event_name` convention: Claude Code sends PascalCase events
 
 Each handler is wrapped with `withTracking()` which records every call to the `tool_usage` table — tool name, timestamp, latency, parameter keys, result count, success/failure, and error classification. Error types are classified as `NOT_FOUND`, `VALIDATION`, or `INTERNAL`.
 
-4 MCP prompts for user-triggered slash commands (appear in IDE `/` autocomplete as `/mcp__ai-memory__<name>`):
+4 IDE skill files for user-triggered slash commands (generated by `ai-memory init`, appear in IDE `/` autocomplete):
 
-| Prompt | Arguments | Action |
-|--------|-----------|--------|
-| `status` | none | Returns live status JSON (conversation count, turn count, tool usage) |
-| `search` | `query` | Runs FTS5 search, returns matching conversations with snippets |
-| `recent` | none | Lists last 10 conversations with titles, summaries, dates |
-| `summarize` | none | Instructs the LLM to summarize the conversation and call `ai-memory-summarize` |
+| Skill | Arguments | Action |
+|-------|-----------|--------|
+| `ai-memory-status` | none | Instructs LLM to call `ai-memory-status` tool and present results |
+| `ai-memory-search` | `$ARGUMENTS` (query) | Instructs LLM to call `ai-memory-search` with the query |
+| `ai-memory-recent` | none | Instructs LLM to call `ai-memory-conversations` (limit 10) |
+| `ai-memory-summarize` | none | Instructs LLM to summarize the conversation and call `ai-memory-summarize` |
 
-Prompts complement tools: tools are LLM-initiated (autonomous), prompts are user-initiated (explicit `/` command).
+Skills are written to `~/.<ide>/skills/ai-memory-*/SKILL.md` per IDE (Codex uses `~/.agents/skills/` per the Agent Skills standard). They complement tools: tools are LLM-initiated (autonomous), skills are user-initiated (explicit `/` command). All skills have `disable-model-invocation: true` so the LLM won't trigger them unprompted.
 
 ### Dashboard (`dashboard/`)
 

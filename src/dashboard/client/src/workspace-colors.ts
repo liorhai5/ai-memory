@@ -43,6 +43,7 @@ export function formatDate(iso: string): string {
 export const IDE_INDICATOR: Record<string, { icon: string; label: string; className: string }> = {
   cursor:        { icon: '⌘',  label: 'Cursor', className: 'ide-cursor' },
   'claude-code': { icon: '>_', label: 'Claude Code', className: 'ide-claude' },
+  codex:         { icon: '◈',  label: 'Codex', className: 'ide-codex' },
 };
 
 export type TimeRange = '' | 'day' | 'week' | 'month' | 'year';
