@@ -89,39 +89,20 @@ describe('dashboard RPC adapter', () => {
     expect(result.workspaces).toEqual(['alpha', 'beta']);
   });
 
-  test('simulateInjection returns output and char count', () => {
+  // D044: simulateInjection removed
+  test('simulateInjection returns unknown method error', () => {
     const { app } = createTempApp();
-    app.conversationStore.upsertConversationByExternalId({ external_id: 'inj-1', workspace: 'alpha', ide: 'cli' });
-
-    const result = expectOk<{ output: string; chars: number }>(
-      handleRpc('simulateInjection', { workspace: 'alpha' }, app)
-    );
-    expect(result.output.length).toBe(result.chars);
-    expect(result.output).toContain('p1:injected:begin');
-  });
-
-  test('updateConfig rejects invalid negative values', () => {
-    const { app } = createTempApp();
-    const result = handleRpc('updateConfig', { injection_max_total_chars: -1 }, app);
+    const result = handleRpc('simulateInjection', { workspace: 'alpha' }, app);
     expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain('Invalid injection_max_total_chars');
-    }
+    if (!result.ok) expect(result.error).toContain('Unknown method');
   });
 
   test('updateConfig applies valid values and persists via saveConfig', () => {
     const { app } = createTempApp();
-    const updated = expectOk<{ config: { injection_max_total_chars: number; injection_max_conversations: number } }>(
-      handleRpc(
-        'updateConfig',
-        { injection_max_total_chars: 900, injection_max_conversations: 4 },
-        app
-      )
+    const updated = expectOk<{ config: Record<string, unknown> }>(
+      handleRpc('updateConfig', {}, app)
     );
-
-    expect(updated.config.injection_max_total_chars).toBe(900);
-    expect(updated.config.injection_max_conversations).toBe(4);
-    expect(app.config.injection_max_total_chars).toBe(900);
+    expect(updated.config).toHaveProperty('search_default_limit');
     expect(saveConfig).toHaveBeenCalledTimes(1);
   });
 
@@ -173,51 +154,27 @@ describe('dashboard RPC adapter', () => {
     expect(result.usage_summary).toHaveProperty('tool_calls_7d');
   });
 
-  test('getDashboardStatus recognizes Claude matcher-group hooks format', () => {
-    const { app, dir } = createTempApp();
-    const prevHome = process.env.HOME;
-    process.env.HOME = dir;
-    try {
-      const claudeDir = join(dir, '.claude');
-      mkdirSync(claudeDir, { recursive: true });
-      writeFileSync(
-        join(claudeDir, 'settings.json'),
-        JSON.stringify(
-          {
-            mcpServers: {
-              'ai-memory': { command: 'ai-memory', args: ['mcp'] }
-            },
-            hooks: {
-              SessionStart: [
-                {
-                  matcher: 'startup|resume|clear|compact',
-                  hooks: [{ type: 'command', command: 'ai-memory hook session-start --ide claude-code' }]
-                }
-              ],
-              UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'ai-memory hook prompt-submit --ide claude-code' }] }],
-              Stop: [{ hooks: [{ type: 'command', command: 'ai-memory hook stop --ide claude-code' }] }],
-              SessionEnd: [{ hooks: [{ type: 'command', command: 'ai-memory hook session-end --ide claude-code' }] }]
-            }
-          },
-          null,
-          2
-        )
-      );
+  // D044 D12: getDashboardStatus returns watcher status (not hook status)
+  test('getDashboardStatus includes watcher status', () => {
+    const { app } = createTempApp();
+    const result = expectOk<{ watcher: { watched_dirs: Array<{ path: string; exists: boolean }>; last_import_at: string | null; import_error_count: number } }>(
+      handleRpc('getDashboardStatus', {}, app)
+    );
+    expect(result.watcher).toBeDefined();
+    expect(Array.isArray(result.watcher.watched_dirs)).toBe(true);
+    expect(result.watcher.watched_dirs.length).toBe(3);
+    expect(result.watcher).toHaveProperty('last_import_at');
+    expect(result.watcher).toHaveProperty('import_error_count');
+  });
 
-      const result = expectOk<{ integrations: { claude_code: { hooks: Record<string, boolean>; settings_mcp_configured: boolean; registry_mcp_configured: boolean; mcp_configured: boolean } } }>(
-        handleRpc('getDashboardStatus', {}, app)
-      );
-      expect(result.integrations.claude_code.hooks.SessionStart).toBe(true);
-      expect(result.integrations.claude_code.hooks.UserPromptSubmit).toBe(true);
-      expect(result.integrations.claude_code.hooks.Stop).toBe(true);
-      expect(result.integrations.claude_code.hooks.SessionEnd).toBe(true);
-      expect(result.integrations.claude_code.settings_mcp_configured).toBe(true);
-      expect(result.integrations.claude_code.registry_mcp_configured).toBe(false);
-      expect(result.integrations.claude_code.mcp_configured).toBe(false);
-    } finally {
-      if (typeof prevHome === 'undefined') delete process.env.HOME;
-      else process.env.HOME = prevHome;
-    }
+  test('getDashboardStatus has no hook fields in integrations', () => {
+    const { app } = createTempApp();
+    const result = expectOk<{ integrations: { cursor: Record<string, unknown>; claude_code: Record<string, unknown> } }>(
+      handleRpc('getDashboardStatus', {}, app)
+    );
+    // Hooks-related fields should not exist
+    expect(result.integrations.cursor.hooks).toBeUndefined();
+    expect(result.integrations.claude_code.hooks).toBeUndefined();
   });
 
   test('getDashboardStatus Claude MCP readiness is true when both registry and settings are configured', () => {
@@ -229,29 +186,11 @@ describe('dashboard RPC adapter', () => {
       mkdirSync(claudeDir, { recursive: true });
       writeFileSync(
         join(claudeDir, 'settings.json'),
-        JSON.stringify(
-          {
-            mcpServers: {
-              'ai-memory': { command: 'ai-memory', args: ['mcp'] }
-            },
-            hooks: {
-              SessionStart: [{ matcher: 'startup|resume|clear|compact', hooks: [{ type: 'command', command: 'ai-memory hook session-start --ide claude-code' }] }],
-              UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'ai-memory hook prompt-submit --ide claude-code' }] }],
-              Stop: [{ hooks: [{ type: 'command', command: 'ai-memory hook stop --ide claude-code' }] }],
-              SessionEnd: [{ hooks: [{ type: 'command', command: 'ai-memory hook session-end --ide claude-code' }] }]
-            }
-          },
-          null,
-          2
-        )
+        JSON.stringify({ mcpServers: { 'ai-memory': { command: 'ai-memory', args: ['mcp'] } } }, null, 2)
       );
       writeFileSync(
         join(dir, '.claude.json'),
-        JSON.stringify(
-          { mcpServers: { 'ai-memory': { command: 'ai-memory', args: ['mcp'] } } },
-          null,
-          2
-        )
+        JSON.stringify({ mcpServers: { 'ai-memory': { command: 'ai-memory', args: ['mcp'] } } }, null, 2)
       );
 
       const result = expectOk<{ integrations: { claude_code: { settings_mcp_configured: boolean; registry_mcp_configured: boolean; mcp_configured: boolean } } }>(
@@ -260,6 +199,28 @@ describe('dashboard RPC adapter', () => {
       expect(result.integrations.claude_code.settings_mcp_configured).toBe(true);
       expect(result.integrations.claude_code.registry_mcp_configured).toBe(true);
       expect(result.integrations.claude_code.mcp_configured).toBe(true);
+    } finally {
+      if (typeof prevHome === 'undefined') delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
+  });
+
+  test('getDashboardStatus shows watcher dirs with correct existence for temp home', () => {
+    const { app, dir } = createTempApp();
+    const prevHome = process.env.HOME;
+    process.env.HOME = dir;
+    try {
+      // Create .claude/projects dir (first watched dir)
+      mkdirSync(join(dir, '.claude', 'projects'), { recursive: true });
+
+      const result = expectOk<{ watcher: { watched_dirs: Array<{ path: string; exists: boolean }> } }>(
+        handleRpc('getDashboardStatus', {}, app)
+      );
+
+      const claudeDir = result.watcher.watched_dirs.find((d) => d.path.includes('.claude/projects'));
+      const cursorDir = result.watcher.watched_dirs.find((d) => d.path.includes('.cursor/projects'));
+      expect(claudeDir?.exists).toBe(true);
+      expect(cursorDir?.exists).toBe(false);
     } finally {
       if (typeof prevHome === 'undefined') delete process.env.HOME;
       else process.env.HOME = prevHome;

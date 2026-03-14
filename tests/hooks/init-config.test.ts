@@ -1,151 +1,135 @@
 import { describe, expect, test } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { generateInitConfig, generateCodexConfig, writeSkills, SKILL_DEFINITIONS } from '../../src/hooks/init-config.js';
+import {
+  registerCursorMcp,
+  registerClaudeCodeMcp,
+  registerCodexMcp,
+  writeSkills,
+  SKILL_DEFINITIONS
+} from '../../src/hooks/init-config.js';
 
 function readJson(path: string): any {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-function hasGroupedCommand(entries: any, command: string, matcher?: string): boolean {
-  if (!Array.isArray(entries)) return false;
-  return entries.some((group: any) => {
-    if (!group || typeof group !== 'object') return false;
-    if (typeof matcher !== 'undefined' && group.matcher !== matcher) return false;
-    if (!Array.isArray(group.hooks)) return false;
-    return group.hooks.some((hook: any) => hook?.type === 'command' && hook?.command === command);
-  });
-}
+// D044: MCP registration tests
 
-describe('generateInitConfig (Claude Code hooks schema)', () => {
-  test('writes matcher-group hook format for Claude Code', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-init-config-claude-'));
-    const settingsPath = join(home, '.claude', 'settings.json');
-    generateInitConfig({ ide: 'claude-code', filePath: settingsPath });
+describe('registerCursorMcp', () => {
+  test('creates mcp.json with ai-memory MCP entry', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-cursor-mcp-'));
+    const mcpPath = join(home, '.cursor', 'mcp.json');
+    const result = registerCursorMcp(mcpPath);
 
-    const json = readJson(settingsPath);
-    expect(hasGroupedCommand(json.hooks?.SessionStart, 'ai-memory hook session-start --ide claude-code', 'startup|resume|clear|compact')).toBe(true);
-    expect(hasGroupedCommand(json.hooks?.UserPromptSubmit, 'ai-memory hook prompt-submit --ide claude-code')).toBe(true);
-    expect(hasGroupedCommand(json.hooks?.Stop, 'ai-memory hook stop --ide claude-code')).toBe(true);
-    expect(hasGroupedCommand(json.hooks?.SessionEnd, 'ai-memory hook session-end --ide claude-code')).toBe(true);
+    expect(result.updated).toBe(true);
+    expect(existsSync(mcpPath)).toBe(true);
+    const json = readJson(mcpPath);
     expect(json.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
   });
 
-  test('is idempotent and does not duplicate Claude hook commands', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-init-config-claude-idempotent-'));
-    const settingsPath = join(home, '.claude', 'settings.json');
-    generateInitConfig({ ide: 'claude-code', filePath: settingsPath });
-    generateInitConfig({ ide: 'claude-code', filePath: settingsPath });
+  test('is idempotent — does not duplicate if already present', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-cursor-mcp-idempotent-'));
+    const mcpPath = join(home, '.cursor', 'mcp.json');
+    registerCursorMcp(mcpPath);
+    const result = registerCursorMcp(mcpPath);
 
-    const json = readJson(settingsPath);
-    const cmd = 'ai-memory hook prompt-submit --ide claude-code';
-    const groups = (json.hooks?.UserPromptSubmit ?? []) as any[];
-    let count = 0;
-    for (const group of groups) {
-      if (!Array.isArray(group?.hooks)) continue;
-      count += group.hooks.filter((hook: any) => hook?.command === cmd).length;
-    }
-    expect(count).toBe(1);
+    expect(result.updated).toBe(false);
+    const json = readJson(mcpPath);
+    expect(json.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
   });
 });
 
-describe('generateCodexConfig', () => {
-  const NOTIFY_LINE = 'notify = ["ai-memory", "hook", "turn-complete", "--ide", "codex"]';
+describe('registerClaudeCodeMcp', () => {
+  test('creates settings.json with ai-memory MCP entry', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-claude-mcp-'));
+    const settingsPath = join(home, '.claude', 'settings.json');
+    const result = registerClaudeCodeMcp(settingsPath);
+
+    expect(result.updated).toBe(true);
+    const json = readJson(settingsPath);
+    expect(json.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
+  });
+
+  test('preserves existing settings fields', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-claude-mcp-preserve-'));
+    const dir = join(home, '.claude');
+    mkdirSync(dir, { recursive: true });
+    const settingsPath = join(dir, 'settings.json');
+    writeFileSync(settingsPath, JSON.stringify({ someOtherKey: true }, null, 2));
+
+    registerClaudeCodeMcp(settingsPath);
+
+    const json = readJson(settingsPath);
+    expect(json.someOtherKey).toBe(true);
+    expect(json.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
+  });
+
+  test('is idempotent — no duplicate entry on second call', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-claude-mcp-idempotent-'));
+    const settingsPath = join(home, '.claude', 'settings.json');
+    registerClaudeCodeMcp(settingsPath);
+    const result = registerClaudeCodeMcp(settingsPath);
+    expect(result.updated).toBe(false);
+  });
+
+  test('does not write hook entries', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-claude-mcp-no-hooks-'));
+    const settingsPath = join(home, '.claude', 'settings.json');
+    registerClaudeCodeMcp(settingsPath);
+
+    const json = readJson(settingsPath);
+    // Hooks section should NOT be written by registerClaudeCodeMcp
+    expect(json.hooks).toBeUndefined();
+  });
+});
+
+describe('registerCodexMcp', () => {
   const MCP_HEADER = '[mcp_servers.ai-memory]';
 
-  test('creates config.toml with notify line and MCP section when file does not exist', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-codex-init-'));
+  test('creates config.toml with MCP section when file does not exist', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-codex-mcp-'));
     const configPath = join(home, '.codex', 'config.toml');
-    const result = generateCodexConfig(configPath);
+    const result = registerCodexMcp(configPath);
 
     expect(result.status).toBe('created');
-    expect(existsSync(configPath)).toBe(true);
     const content = readFileSync(configPath, 'utf8');
-    expect(content).toContain(NOTIFY_LINE);
     expect(content).toContain(MCP_HEADER);
     expect(content).toContain('command = "ai-memory"');
     expect(content).toContain('args = ["mcp"]');
   });
 
-  test('is idempotent — returns exists when both notify and MCP are set', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-codex-idempotent-'));
+  test('does not write notify line', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-codex-mcp-no-notify-'));
     const configPath = join(home, '.codex', 'config.toml');
-    generateCodexConfig(configPath);
-    const result = generateCodexConfig(configPath);
+    registerCodexMcp(configPath);
+    const content = readFileSync(configPath, 'utf8');
+    expect(content).not.toContain('notify');
+  });
 
+  test('is idempotent — returns exists when MCP section already present', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-codex-mcp-idempotent-'));
+    const configPath = join(home, '.codex', 'config.toml');
+    registerCodexMcp(configPath);
+    const result = registerCodexMcp(configPath);
     expect(result.status).toBe('exists');
   });
 
-  test('replaces existing notify line with different value', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-codex-replace-'));
+  test('adds MCP section to existing config without clobbering existing content', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ai-memory-codex-mcp-preserve-'));
     const dir = join(home, '.codex');
+    mkdirSync(dir, { recursive: true });
     const configPath = join(dir, 'config.toml');
-    const { mkdirSync: mk, writeFileSync: wf } = require('node:fs');
-    mk(dir, { recursive: true });
-    wf(configPath, 'model = "gpt-5.3"\nnotify = ["some-other-tool"]\n');
+    writeFileSync(configPath, 'model = "gpt-4o"\n');
 
-    const result = generateCodexConfig(configPath);
-    expect(result.status).toBe('created');
+    registerCodexMcp(configPath);
+
     const content = readFileSync(configPath, 'utf8');
-    expect(content).toContain(NOTIFY_LINE);
-    expect(content).not.toContain('some-other-tool');
-    expect(content).toContain('model = "gpt-5.3"');
+    expect(content).toContain('model = "gpt-4o"');
     expect(content).toContain(MCP_HEADER);
-  });
-
-  test('preserves existing config and inserts before section headers', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-codex-preserve-'));
-    const dir = join(home, '.codex');
-    const configPath = join(dir, 'config.toml');
-    const { mkdirSync: mk, writeFileSync: wf } = require('node:fs');
-    mk(dir, { recursive: true });
-    wf(configPath, 'model = "gpt-5.3"\n\n[features]\ncodex_hooks = true\n');
-
-    const result = generateCodexConfig(configPath);
-    expect(result.status).toBe('created');
-    const content = readFileSync(configPath, 'utf8');
-    expect(content).toContain(NOTIFY_LINE);
-    expect(content).toContain('[features]');
-    expect(content).toContain('model = "gpt-5.3"');
-    expect(content).toContain(MCP_HEADER);
-    const notifyIdx = content.indexOf(NOTIFY_LINE);
-    const featuresIdx = content.indexOf('[features]');
-    expect(notifyIdx).toBeLessThan(featuresIdx);
-  });
-
-  test('adds MCP section to existing file that already has notify (D042 upgrade path)', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-codex-mcp-upgrade-'));
-    const dir = join(home, '.codex');
-    const configPath = join(dir, 'config.toml');
-    const { mkdirSync: mk, writeFileSync: wf } = require('node:fs');
-    mk(dir, { recursive: true });
-    // Simulate pre-D042 config: notify present, no MCP
-    wf(configPath, `model = "gpt-5.3"\n${NOTIFY_LINE}\n\n[features]\ncodex_hooks = true\n`);
-
-    const result = generateCodexConfig(configPath);
-    expect(result.status).toBe('updated');
-    const content = readFileSync(configPath, 'utf8');
-    expect(content).toContain(NOTIFY_LINE);
-    expect(content).toContain(MCP_HEADER);
-    expect(content).toContain('[features]');
-  });
-
-  test('skips MCP section if already present', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-codex-mcp-exists-'));
-    const dir = join(home, '.codex');
-    const configPath = join(dir, 'config.toml');
-    const { mkdirSync: mk, writeFileSync: wf } = require('node:fs');
-    mk(dir, { recursive: true });
-    const existing = `${NOTIFY_LINE}\n\n${MCP_HEADER}\ncommand = "ai-memory"\nargs = ["mcp"]\n`;
-    wf(configPath, existing);
-
-    const result = generateCodexConfig(configPath);
-    expect(result.status).toBe('exists');
-    // Content unchanged
-    expect(readFileSync(configPath, 'utf8')).toBe(existing);
   });
 });
+
 
 describe('writeSkills (D040)', () => {
   const SKILL_NAMES = ['ai-memory-status', 'ai-memory-search', 'ai-memory-recent', 'ai-memory-summarize'];

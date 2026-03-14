@@ -3,18 +3,10 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface AiMemoryConfig {
-  injection_max_conversations: number;
-  injection_max_title_chars: number;
-  injection_max_summary_chars: number;
-  injection_max_total_chars: number;
   search_default_limit: number;
 }
 
 const DEFAULTS: AiMemoryConfig = {
-  injection_max_conversations: 5,
-  injection_max_title_chars: 80,
-  injection_max_summary_chars: 150,
-  injection_max_total_chars: 1800,
   search_default_limit: 20,
 };
 
@@ -31,7 +23,6 @@ export function loadConfig(customPath?: string): AiMemoryConfig {
       const raw = JSON.parse(readFileSync(path, 'utf8'));
       return { ...DEFAULTS, ...raw };
     } catch {
-      // D038 D9: Log corruption warning to stderr (health_warnings persisted by caller if DB available)
       process.stderr.write(`[ai-memory] config.json parse failed at ${path}, using defaults\n`);
     }
   }

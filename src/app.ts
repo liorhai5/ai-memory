@@ -2,7 +2,6 @@ import type Database from 'better-sqlite3';
 import { createDb, getDbPath } from './db/connection.js';
 import { ConversationStore } from './stores/conversation-store.js';
 import { SearchService } from './services/search-service.js';
-import { InjectionService } from './services/injection-service.js';
 import { ImportService } from './services/import-service.js';
 import { StatusService } from './services/status-service.js';
 import { UsageService } from './services/usage-service.js';
@@ -13,7 +12,6 @@ export interface AppContext {
   config: AiMemoryConfig;
   conversationStore: ConversationStore;
   searchService: SearchService;
-  injectionService: InjectionService;
   importService: ImportService;
   statusService: StatusService;
   usageService: UsageService;
@@ -22,9 +20,8 @@ export interface AppContext {
 export function createApp(dbPath = getDbPath(), configPath?: string): AppContext {
   const db = createDb(dbPath);
   const config = loadConfig(configPath);
-  const conversationStore = new ConversationStore(db, config.injection_max_title_chars);
+  const conversationStore = new ConversationStore(db);
   const searchService = new SearchService(db, config);
-  const injectionService = new InjectionService(conversationStore, config);
   const importService = new ImportService(conversationStore);
   const statusService = new StatusService(db, dbPath);
   const usageService = new UsageService(db);
@@ -34,7 +31,6 @@ export function createApp(dbPath = getDbPath(), configPath?: string): AppContext
     config,
     conversationStore,
     searchService,
-    injectionService,
     importService,
     statusService,
     usageService

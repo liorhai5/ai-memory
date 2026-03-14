@@ -52,7 +52,7 @@ function round2(n: number): number {
 export function parseUsageRange(value: unknown): UsageRange {
   if (typeof value === 'string' && value in RANGE_TO_MS) return value as UsageRange;
   if (value === '') return '';
-  return 'day';
+  return '7d';
 }
 
 export class UsageService {

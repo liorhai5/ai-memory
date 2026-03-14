@@ -4,6 +4,7 @@ import type { IdeType, TurnRole } from '../types.js';
 import { ConversationStore } from '../stores/conversation-store.js';
 import { stripPromptWrappers } from '../utils/strip.js';
 import { deriveProjectKey, normalizeWorkspaceLabel } from '../utils/workspace-identity.js';
+import { basename } from 'node:path';
 
 export interface ImportReport {
   created: number;
@@ -35,13 +36,45 @@ function toIso(ts: unknown): string {
 export class ImportService {
   constructor(private readonly conversationStore: ConversationStore) {}
 
-  importTranscripts(source: 'cursor' | 'claude-code' | 'all' = 'all', forceSummary = false): ImportReport {
+  importTranscripts(source: 'cursor' | 'claude-code' | 'codex' | 'all' = 'all', forceSummary = false): ImportReport {
     const report: ImportReport = { created: 0, updated: 0, skipped: 0, errors: 0 };
     if (source === 'all' || source === 'claude-code') {
       this.importClaude(report, forceSummary);
     }
     if (source === 'all' || source === 'cursor') {
       this.importCursor(report, forceSummary);
+    }
+    if (source === 'all' || source === 'codex') {
+      this.importCodex(report, forceSummary);
+    }
+    // D044 D9: Defensive prune — import only creates conversations with turns, but clean up any stragglers
+    this.conversationStore.pruneEmptyConversations();
+    return report;
+  }
+
+  // D044: Import a single file (for file-watcher triggered imports)
+  importFile(filePath: string, forceSummary = false): ImportReport {
+    const report: ImportReport = { created: 0, updated: 0, skipped: 0, errors: 0 };
+    if (filePath.includes('/.claude/projects/')) {
+      // Extract externalId from filename, workspace from parent dir
+      const parts = filePath.split('/');
+      const fileName = parts[parts.length - 1];
+      if (!fileName.endsWith('.jsonl')) { report.skipped += 1; return report; }
+      const externalId = fileName.replace(/\.jsonl$/, '');
+      const projectDir = parts[parts.length - 2];
+      const workspace = projectDir.replace(/^-/, '');
+      this.importSingleFile({ ide: 'claude-code', filePath, externalId, workspace, report, forceSummary });
+    } else if (filePath.includes('/.cursor/projects/')) {
+      const parts = filePath.split('/');
+      const fileName = parts[parts.length - 1];
+      if (!fileName.endsWith('.jsonl')) { report.skipped += 1; return report; }
+      const convDir = fileName.replace(/\.jsonl$/, '');
+      const projectDir = parts[parts.length - 4];
+      this.importSingleFile({ ide: 'cursor', filePath, externalId: convDir, workspace: projectDir, report, forceSummary });
+    } else if (filePath.includes('/.codex/sessions/')) {
+      this.importCodexFile(filePath, report, forceSummary);
+    } else {
+      report.skipped += 1;
     }
     return report;
   }
@@ -55,7 +88,7 @@ export class ImportService {
       if (!existsSync(dir)) continue;
       const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
       for (const file of files) {
-        this.importFile({
+        this.importSingleFile({
           ide: 'claude-code',
           filePath: `${dir}/${file}`,
           externalId: file.replace(/\.jsonl$/, ''),
@@ -78,7 +111,7 @@ export class ImportService {
       for (const convDir of conversationDirs) {
         const path = `${transcriptBase}/${convDir}/${convDir}.jsonl`;
         if (!existsSync(path)) continue;
-        this.importFile({
+        this.importSingleFile({
           ide: 'cursor',
           filePath: path,
           externalId: convDir,
@@ -90,7 +123,120 @@ export class ImportService {
     }
   }
 
-  private importFile(input: {
+  // D044 D2: Codex transcript import — reads from ~/.codex/sessions/YYYY/MM/DD/*.jsonl
+  private importCodex(report: ImportReport, forceSummary: boolean): void {
+    const base = `${homedir()}/.codex/sessions`;
+    if (!existsSync(base)) return;
+    const years = readdirSync(base);
+    for (const year of years) {
+      const yearDir = `${base}/${year}`;
+      if (!existsSync(yearDir)) continue;
+      let months: string[];
+      try { months = readdirSync(yearDir); } catch { continue; }
+      for (const month of months) {
+        const monthDir = `${yearDir}/${month}`;
+        if (!existsSync(monthDir)) continue;
+        let days: string[];
+        try { days = readdirSync(monthDir); } catch { continue; }
+        for (const day of days) {
+          const dayDir = `${monthDir}/${day}`;
+          if (!existsSync(dayDir)) continue;
+          let files: string[];
+          try { files = readdirSync(dayDir).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
+          for (const file of files) {
+            this.importCodexFile(`${dayDir}/${file}`, report, forceSummary);
+          }
+        }
+      }
+    }
+  }
+
+  private importCodexFile(filePath: string, report: ImportReport, forceSummary: boolean): void {
+    try {
+      const stat = statSync(filePath);
+      const lines = readFileSync(filePath, 'utf8').split('\n').filter(Boolean);
+      const { externalId, workspace, workspacePath, startedAt } = this.parseCodexMeta(lines);
+      if (!externalId) { report.skipped += 1; return; }
+      const messages = this.parseCodexMessages(lines);
+      if (messages.length === 0) { report.skipped += 1; return; }
+
+      const workspaceLabel = normalizeWorkspaceLabel(workspace);
+      const existing = this.conversationStore.byExternalId(externalId);
+      const conversation = this.conversationStore.upsertConversationByExternalId({
+        external_id: externalId,
+        workspace: workspaceLabel,
+        project_key: deriveProjectKey({ workspace: workspaceLabel, sourcePath: workspacePath ?? filePath }),
+        ide: 'codex',
+        source_path: filePath,
+        source_mtime: stat.mtime.toISOString(),
+        started_at: startedAt ?? messages[0].created_at
+      });
+      if (existing) report.updated += 1;
+      else report.created += 1;
+
+      const firstUser = messages.find((m) => m.role === 'user');
+      if (firstUser) {
+        const clean = stripPromptWrappers(firstUser.content);
+        this.conversationStore.setTitleIfEmpty(conversation.id, clean);
+        if (forceSummary || !conversation.summary) {
+          this.conversationStore.upsertSummary(conversation.id, clean);
+        }
+      }
+
+      for (const msg of messages) {
+        const inserted = this.conversationStore.addTurn({
+          conversation_id: conversation.id,
+          role: msg.role,
+          content: msg.content,
+          created_at: msg.created_at
+        });
+        if (!inserted) report.skipped += 1;
+      }
+    } catch {
+      report.errors += 1;
+    }
+  }
+
+  private parseCodexMeta(lines: string[]): { externalId: string | null; workspace: string | null; workspacePath: string | null; startedAt: string | null } {
+    for (const line of lines) {
+      try {
+        const row = JSON.parse(line);
+        if (row.type === 'session_meta' && row.payload) {
+          const externalId = typeof row.payload.id === 'string' ? row.payload.id : null;
+          const cwd = typeof row.payload.cwd === 'string' ? row.payload.cwd : null;
+          const workspace = cwd ? basename(cwd) : null;
+          const startedAt = typeof row.timestamp === 'string' ? row.timestamp : null;
+          return { externalId, workspace, workspacePath: cwd, startedAt };
+        }
+      } catch { /* skip malformed */ }
+    }
+    return { externalId: null, workspace: null, workspacePath: null, startedAt: null };
+  }
+
+  private parseCodexMessages(lines: string[]): ParsedMessage[] {
+    const messages: ParsedMessage[] = [];
+    for (const line of lines) {
+      try {
+        const row = JSON.parse(line);
+        if (row.type !== 'response_item') continue;
+        const payload = row.payload;
+        if (!payload || payload.type !== 'message') continue;
+        const role = payload.role;
+        if (role !== 'user' && role !== 'assistant') continue; // skip developer/system
+        const content = Array.isArray(payload.content)
+          ? payload.content
+              .filter((c: any) => (c?.type === 'input_text' || c?.type === 'output_text') && typeof c.text === 'string')
+              .map((c: any) => c.text as string)
+              .join('')
+          : '';
+        if (!content.trim()) continue;
+        messages.push({ role: role as TurnRole, content, created_at: toIso(row.timestamp) });
+      } catch { /* skip malformed */ }
+    }
+    return messages;
+  }
+
+  private importSingleFile(input: {
     ide: IdeType;
     filePath: string;
     externalId: string;

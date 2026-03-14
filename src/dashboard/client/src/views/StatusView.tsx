@@ -23,44 +23,39 @@ interface StatusPayload {
   };
   integrations: {
     cursor: {
-      hooks_file: string;
       mcp_file: string;
-      hooks_file_exists: boolean;
       mcp_file_exists: boolean;
-      hooks_parse_error: string | null;
-      mcp_parse_error: string | null;
-      hooks: Record<string, boolean>;
       mcp_configured: boolean;
+      mcp_parse_error: string | null;
     };
     claude_code: {
       settings_file: string;
       settings_exists: boolean;
-      settings_parse_error: string | null;
-      hooks: Record<string, boolean>;
       settings_mcp_configured: boolean;
       registry_file: string;
       registry_exists: boolean;
-      registry_parse_error: string | null;
       registry_mcp_configured: boolean;
       mcp_configured: boolean;
+      settings_parse_error: string | null;
+      registry_parse_error: string | null;
     };
     codex: {
       config_file: string;
       config_exists: boolean;
-      notify_configured: boolean;
       mcp_configured: boolean;
       config_parse_error: string | null;
     };
+  };
+  watcher: {
+    watched_dirs: Array<{ path: string; exists: boolean }>;
+    last_import_at: string | null;
+    import_error_count: number;
   };
   skills: {
     expected: string[];
     by_ide: Record<string, { installed: number; total: number; missing: string[] }>;
   };
   config_snapshot: {
-    injection_max_conversations: number;
-    injection_max_title_chars: number;
-    injection_max_summary_chars: number;
-    injection_max_total_chars: number;
     search_default_limit: number;
     config_path: string;
     config_exists: boolean;
@@ -70,7 +65,6 @@ interface StatusPayload {
   runtime: {
     last_ingest_at: string | null;
     last_error: string | null;
-    note: string;
   };
   usage_summary: {
     tool_calls_24h: number;
@@ -231,19 +225,33 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
             </div>
           </Section>
 
+          <Section title="File Watcher">
+            <div className="status-card">
+              <div className="status-card-k">Watched directories</div>
+              {data.watcher.watched_dirs.map((d) => (
+                <div key={d.path} className="status-list-row">
+                  <span className="status-mono">{d.path}</span>
+                  <BoolBadge ok={d.exists} />
+                </div>
+              ))}
+              <div className="status-list-row">
+                <span>Last import</span>
+                <span>{data.watcher.last_import_at ? formatDate(data.watcher.last_import_at) : '—'}</span>
+              </div>
+              <div className="status-list-row">
+                <span>Import errors</span>
+                <span className="status-mono">{data.watcher.import_error_count}</span>
+              </div>
+            </div>
+          </Section>
+
           <Section title="IDE Integrations">
             <div className="status-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
               <div className="status-card">
                 <div className="status-card-k">Cursor</div>
-                <div className="status-list-row"><span>Hooks file exists</span><BoolBadge ok={data.integrations.cursor.hooks_file_exists} /></div>
                 <div className="status-list-row"><span>MCP file exists</span><BoolBadge ok={data.integrations.cursor.mcp_file_exists} /></div>
                 <div className="status-list-row"><span>MCP configured</span><BoolBadge ok={data.integrations.cursor.mcp_configured} /></div>
-                {Object.entries(data.integrations.cursor.hooks).map(([k, ok]) => (
-                  <div key={k} className="status-list-row"><span>{k}</span><BoolBadge ok={ok} /></div>
-                ))}
-                <div className="status-mono status-path">{data.integrations.cursor.hooks_file}</div>
                 <div className="status-mono status-path">{data.integrations.cursor.mcp_file}</div>
-                {data.integrations.cursor.hooks_parse_error && <div className="status-warn">{data.integrations.cursor.hooks_parse_error}</div>}
                 {data.integrations.cursor.mcp_parse_error && <div className="status-warn">{data.integrations.cursor.mcp_parse_error}</div>}
               </div>
               <div className="status-card">
@@ -252,9 +260,6 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
                 <div className="status-list-row"><span>Settings MCP</span><BoolBadge ok={data.integrations.claude_code.settings_mcp_configured} /></div>
                 <div className="status-list-row"><span>Registry MCP</span><BoolBadge ok={data.integrations.claude_code.registry_mcp_configured} /></div>
                 <div className="status-list-row"><span>MCP ready</span><BoolBadge ok={data.integrations.claude_code.mcp_configured} /></div>
-                {Object.entries(data.integrations.claude_code.hooks).map(([k, ok]) => (
-                  <div key={k} className="status-list-row"><span>{k}</span><BoolBadge ok={ok} /></div>
-                ))}
                 <div className="status-mono status-path">{data.integrations.claude_code.settings_file}</div>
                 {data.integrations.claude_code.registry_file && <div className="status-mono status-path">{data.integrations.claude_code.registry_file}</div>}
                 {data.integrations.claude_code.settings_parse_error && <div className="status-warn">{data.integrations.claude_code.settings_parse_error}</div>}
@@ -263,7 +268,6 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
               <div className="status-card">
                 <div className="status-card-k">Codex</div>
                 <div className="status-list-row"><span>Config exists</span><BoolBadge ok={data.integrations.codex.config_exists} /></div>
-                <div className="status-list-row"><span>Notify configured</span><BoolBadge ok={data.integrations.codex.notify_configured} /></div>
                 <div className="status-list-row"><span>MCP configured</span><BoolBadge ok={data.integrations.codex.mcp_configured} /></div>
                 <div className="status-mono status-path">{data.integrations.codex.config_file}</div>
                 {data.integrations.codex.config_parse_error && <div className="status-warn">{data.integrations.codex.config_parse_error}</div>}
@@ -292,10 +296,6 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
 
           <Section title="Config Snapshot">
             <div className="status-card">
-              <div className="status-list-row"><span>injection_max_conversations</span><span className="status-mono">{data.config_snapshot.injection_max_conversations}</span></div>
-              <div className="status-list-row"><span>injection_max_title_chars</span><span className="status-mono">{data.config_snapshot.injection_max_title_chars}</span></div>
-              <div className="status-list-row"><span>injection_max_summary_chars</span><span className="status-mono">{data.config_snapshot.injection_max_summary_chars}</span></div>
-              <div className="status-list-row"><span>injection_max_total_chars</span><span className="status-mono">{data.config_snapshot.injection_max_total_chars}</span></div>
               <div className="status-list-row"><span>search_default_limit</span><span className="status-mono">{data.config_snapshot.search_default_limit}</span></div>
               <div className="status-list-row"><span>config exists</span><BoolBadge ok={data.config_snapshot.config_exists} /></div>
               <div className="status-list-row"><span>config mtime</span><span>{data.config_snapshot.config_mtime ? formatDate(data.config_snapshot.config_mtime) : '—'}</span></div>
@@ -307,7 +307,6 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
             <div className="status-card">
               <div className="status-list-row"><span>last_ingest_at</span><span>{data.runtime.last_ingest_at ? formatDate(data.runtime.last_ingest_at) : '—'}</span></div>
               <div className="status-list-row"><span>last_error</span><span>{data.runtime.last_error ?? '—'}</span></div>
-              <div className="status-note">{data.runtime.note}</div>
             </div>
           </Section>
 
@@ -340,4 +339,3 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
     </>
   );
 }
-

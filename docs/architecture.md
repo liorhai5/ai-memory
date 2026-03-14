@@ -2,7 +2,7 @@
 
 > Conversation log and retrieval for AI coding assistants.
 
-ai-memory captures every AI conversation, makes it searchable via FTS5, and injects recent context at session start. It runs locally, stores everything on the user's machine, and operates without LLM involvement (except optional LLM-written summaries via MCP tool).
+ai-memory captures every AI conversation and makes it searchable via FTS5. It watches IDE transcript directories and imports turns automatically via the MCP server process. It runs locally, stores everything on the user's machine, and operates without LLM involvement (except optional LLM-written summaries via MCP tool).
 
 ---
 
@@ -12,12 +12,12 @@ ai-memory captures every AI conversation, makes it searchable via FTS5, and inje
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          Adapters                                    │
 │                                                                      │
-│  ┌──────────┐  ┌─────────┐  ┌──────────┐  ┌──────────────┐         │
-│  │IDE Hooks │  │   CLI   │  │   MCP    │  │  Dashboard   │         │
-│  │ stdin IO │  │Commander│  │  stdio   │  │  HTTP + SPA  │         │
-│  └────┬─────┘  └────┬────┘  └────┬─────┘  └──────┬───────┘         │
-│       │              │            │               │                  │
-│       └──────────────┴────────────┼───────────────┘                  │
+│  ┌─────────┐  ┌──────────────────────┐  ┌──────────────┐            │
+│  │   CLI   │  │   MCP (stdio)        │  │  Dashboard   │            │
+│  │Commander│  │ tools + file watcher │  │  HTTP + SPA  │            │
+│  └────┬────┘  └──────────┬───────────┘  └──────┬───────┘            │
+│       │                  │                     │                     │
+│       └──────────────────┼─────────────────────┘                     │
 │                                   │                                  │
 ├───────────────────────────────────┼──────────────────────────────────┤
 │                                   ▼                                  │
@@ -31,8 +31,8 @@ ai-memory captures every AI conversation, makes it searchable via FTS5, and inje
 │             ┌──────────┐  ┌───────────┐  ┌────────────┐             │
 │             │ Services │  │  Stores   │  │   Config   │             │
 │             │ Search   │  │Conversation│  │config.json │             │
-│             │Injection │  │  Store    │  └────────────┘             │
-│             │ Import   │  └─────┬─────┘                             │
+│             │ Import   │  │  Store    │  └────────────┘             │
+│             │ Status   │  └─────┬─────┘                             │
 │             │ Status   │        │                                    │
 │             │ Usage    │        ▼                                    │
 │             └──────────┘ ┌──────────────────┐                       │
@@ -45,7 +45,7 @@ ai-memory captures every AI conversation, makes it searchable via FTS5, and inje
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-Four adapters (IDE Hooks, CLI, MCP, Dashboard) are wrappers over `AppContext`. They share the same services, store, and database.
+Three adapters (CLI, MCP, Dashboard) are wrappers over `AppContext`. They share the same services, store, and database. The MCP server also hosts the file watcher that imports IDE transcripts automatically.
 
 ---
 
@@ -63,14 +63,12 @@ src/
 │   └── conversation-store.ts Data access for conversations and turns
 ├── services/
 │   ├── search-service.ts     FTS5 BM25 search + summary/title LIKE fallback
-│   ├── injection-service.ts  Bounded context injection at session start
-│   ├── import-service.ts     Transcript import from Cursor/Claude JSONL
+│   ├── import-service.ts     Transcript import from Cursor/Claude/Codex JSONL
 │   ├── status-service.ts     Health check and aggregate stats
 │   ├── usage-service.ts      MCP tool usage analytics and dashboard data
 │   └── config-service.ts     Load/save config from ~/.ai-memory/config.json
 ├── hooks/
-│   ├── handlers.ts           IDE hook handlers (session-start, prompt-submit, stop, turn-complete)
-│   └── init-config.ts        IDE config file generation + skill file generation
+│   └── init-config.ts        IDE MCP config registration + skill file generation
 ├── mcp/
 │   ├── server.ts             MCP tool handler map (5 tools)
 │   └── stdio.ts              MCP stdio transport + tool registration
@@ -94,7 +92,7 @@ design-logs/                  Design decision records (draft → approved → im
 
 | Layer | Role | Rule |
 |-------|------|------|
-| **Adapters** (hooks, cli, mcp, dashboard) | Translate external protocols to service calls | Format input, call service, format output |
+| **Adapters** (cli, mcp, dashboard) | Translate external protocols to service calls | Format input, call service, format output |
 | **Services** | Business logic and orchestration | Stateless — receive store/config via constructor |
 | **Stores** | Data access — SQL queries, insert/upsert | One store per aggregate (ConversationStore owns both conversations and turns) |
 | **DB** | Schema definition and connection | Schema is declarative DDL (`CREATE ... IF NOT EXISTS`); connection runs lightweight column migrations on existing DBs |
@@ -113,7 +111,6 @@ interface AppContext {
   config: AiMemoryConfig;
   conversationStore: ConversationStore;
   searchService: SearchService;
-  injectionService: InjectionService;
   importService: ImportService;
   statusService: StatusService;
   usageService: UsageService;
@@ -134,8 +131,8 @@ Single data access class for the `conversations` and `turns` tables. Key operati
 - `setTitleIfEmpty()` — auto-title from first user message (init only)
 - `updateTitle()` — replace conversation title (manual/LLM refresh)
 - `upsertSummary()` — replace conversation summary
-- `listRecentByProjectKey()` — project-key-first ordering for injection (falls back to `listRecentByWorkspace()` when `project_key` is null)
-- `pruneEmptyConversations()` — delete conversations with 0 turns, no title, older than 1 hour (called on session start to clean up stale upserts)
+- `listRecentByProjectKey()` — project-key-first ordering (falls back to `listRecentByWorkspace()` when `project_key` is null)
+- `pruneEmptyConversations()` — delete conversations with 0 turns, no title, older than 1 hour (called after import to clean up stale upserts)
 
 ### SearchService (`services/search-service.ts`)
 
@@ -145,21 +142,14 @@ Two-phase search:
 
 Results are grouped by conversation and include `match_source` (`turn` | `summary` | `title`).
 
-### InjectionService (`services/injection-service.ts`)
-
-Builds bounded context for session-start injection. Primary method is `buildForProjectKey(projectKey, workspace)`. `buildForWorkspace()` is a convenience wrapper that calls `buildForProjectKey(null, workspace)`. Hard limits (no token heuristics):
-- Max N conversations (default 5)
-- Max chars per title, per summary, total output
-- Current project/workspace conversations first, then others
-- Overflow: drops other-workspace entries, then hard-truncates
-
 ### ImportService (`services/import-service.ts`)
 
 Reads JSONL transcript files from IDE data directories:
-- **Cursor**: `~/.cursor/projects/*/agent-transcripts/*/*.jsonl`
 - **Claude Code**: `~/.claude/projects/*/*.jsonl`
+- **Cursor**: `~/.cursor/projects/*/agent-transcripts/*/*.jsonl`
+- **Codex**: `~/.codex/sessions/YYYY/MM/DD/*.jsonl` (session_meta + response_item records)
 
-Idempotent — deduplicates conversations by `external_id`, turns by `content_hash`.
+Idempotent — deduplicates conversations by `external_id`, turns by `content_hash`. Also exposes `importFile(filePath)` for single-file import triggered by the MCP server's file watcher.
 
 ### Workspace Identity (`utils/workspace-identity.ts`)
 
@@ -218,7 +208,7 @@ Normalizes workspace labels and derives project keys. Key behaviors:
 - `turns_fts` is a virtual table synced manually on each `addTurn()` call
 - Foreign key: `turns.conversation_id` → `conversations.id`
 - `project_key` is indexed — used for project-scoped queries and injection grouping
-- `(tool_name, called_at)` is indexed on `tool_usage` — used for time-windowed usage analytics. Hook invocations use `hook:<event>` naming (e.g. `hook:session-start`, `hook:stop`)
+- `(tool_name, called_at)` is indexed on `tool_usage` — used for time-windowed usage analytics. Watcher-triggered imports use `import:watch` naming
 - `(category, message)` is UNIQUE on `health_warnings` — deduplicates warnings, upsert updates `last_seen_at`
 
 ### Why SQLite + FTS5
@@ -231,46 +221,28 @@ Normalizes workspace labels and derives project keys. Key behaviors:
 
 ## Data Flows
 
-### 1. Capture (IDE hooks → DB)
+### 1. Capture (file watcher → DB)
 
 ```
-IDE hook (prompt-submit / stop / afterAgentResponse)
-  → cli.ts: parseStdin() → parseIdeStdin(ide, raw) → typed HookPayload
-  → phantom check: skip if IDE/event mismatch
-  → handlers.ts: receive resolved params
-  → ConversationStore.upsertConversationByExternalId()
-  → ConversationStore.addTurn()
-    → hash content (SHA-256)
-    → INSERT OR IGNORE into turns (dedup by content_hash)
-    → INSERT OR REPLACE into turns_fts (sync FTS index)
-    → UPDATE conversations.turn_count, updated_at
-  → On first user turn: setTitleIfEmpty() + upsertSummary()
+MCP server starts (ai-memory mcp)
+  → startup catch-up: ImportService.importTranscripts('all')
+  → fs.watch() on ~/.claude/projects, ~/.cursor/projects, ~/.codex/sessions
 
-Codex turn-complete (notify → DB):
-  → cli.ts: parse argv JSON → parseIdeStdin('codex', raw) → typed HookPayload
-  → filter: skip system/title-generation turns
-  → handlers.ts: turnCompleteHook()
-  → ConversationStore.upsertConversationByExternalId()
-  → ConversationStore.addTurn() × 2 (user + assistant, each deduped by content_hash)
-  → On first user turn: setTitleIfEmpty() + upsertSummary()
+IDE writes transcript file (.jsonl)
+  → watcher fires, debounce 500ms
+  → ImportService.importFile(filePath)
+    → detect IDE from path, parse JSONL
+    → ConversationStore.upsertConversationByExternalId()
+    → ConversationStore.addTurn()
+      → hash content (SHA-256)
+      → INSERT OR IGNORE into turns (dedup by content_hash)
+      → INSERT OR REPLACE into turns_fts (sync FTS index)
+      → UPDATE conversations.turn_count, updated_at
+    → On first user turn: setTitleIfEmpty() + upsertSummary()
+  → Record import:watch entry in tool_usage
 ```
 
-### 2. Injection (session start → context)
-
-```
-IDE hook (session-start)
-  → cli.ts: parseStdin() → parseIdeStdin(ide, raw) → typed HookPayload
-  → phantom check: skip if IDE/event mismatch
-  → handlers.ts: prune empty conversations, upsert conversation, drift check
-  → InjectionService.buildForProjectKey()
-    → ConversationStore.listRecentByProjectKey() (same project first, falls back to workspace)
-    → Format titles + summaries with hard char limits
-    → Truncate overflow (drop other-project entries, then hard-cut)
-  → Return additional_context string (HTML comment-wrapped)
-  → cli.ts: emit plain text (Claude Code) or JSON (Cursor)
-```
-
-### 3. Search (query → ranked results)
+### 2. Search (query → ranked results)
 
 ```
 User/LLM issues search query
@@ -299,38 +271,13 @@ ai-memory import-transcripts
 
 ## Adapter Details
 
-### IDE Hooks (`hooks/` + `cli.ts hook`)
+### Init Config (`hooks/init-config.ts`)
 
-The hooks adapter captures conversations and injects context via IDE lifecycle events. It spans two files: `cli.ts` (stdin parsing, output formatting) and `hooks/handlers.ts` (business logic dispatch).
+Registers MCP server for each IDE and writes skill files for slash command support. On `init` run, also removes any stale `ai-memory hook` entries from existing IDE config files (one-time migration for users upgrading from the hook-based system):
 
-#### Event mapping
-
-| Handler | CLI event | Claude Code hook | Cursor hook | Action |
-|---------|-----------|-----------------|-------------|--------|
-| `sessionStartHook` | `session-start` | `SessionStart` | `sessionStart` | Prune empty conversations, upsert conversation, drift check, return injected context |
-| `beforeSubmitPromptHook` | `prompt-submit` | `UserPromptSubmit` | `beforeSubmitPrompt` | Capture user turn, auto-title on first turn |
-| `stopHook` | `stop` | `Stop` | `stop` | CC: capture assistant turn from `last_assistant_message`. Cursor: metadata-only (no content capture) |
-| `stopHook` (via afterAgentResponse) | `afterAgentResponse` | N/A | `afterAgentResponse` | Cursor only: capture assistant turn from `stdin.text` |
-| `turnCompleteHook` | `turn-complete` | N/A | N/A | Codex only: capture both user + assistant turns from `notify` argv payload |
-| `sessionEndHook` | `session-end` | `SessionEnd` | `sessionEnd` | No-op |
-
-All hooks receive `project_key` (derived from workspace path) for stable project identity across sessions. Each hook invocation is recorded in the `tool_usage` table with `hook:<event>` naming for observability.
-
-#### Error handling
-
-All hook CLI commands wrap in try/catch, write errors to stderr, and `exit(0)`. Hooks must never crash the IDE — a failed hook silently degrades rather than blocking the user.
-
-#### Init Config (`hooks/init-config.ts`)
-
-Generates IDE-specific hook and MCP configuration files, and writes skill files for slash command support. For Claude Code, old flat-format ai-memory entries are automatically stripped and replaced with the grouped format:
-
-- **Cursor**: flat hook entries in `~/.cursor/hooks.json`, MCP in separate `~/.cursor/mcp.json`
-- **Claude Code**: grouped matcher entries in `~/.claude/settings.json` with nested hooks arrays:
-  ```json
-  { "matcher": "startup|resume|clear|compact", "hooks": [{ "type": "command", "command": "..." }] }
-  ```
-  SessionStart hooks use a matcher so injection runs on startup, resume, clear, and compact events.
-- **Codex**: `notify` entry in `~/.codex/config.toml` (fire-and-forget, no hooks/MCP config needed)
+- **Cursor**: MCP in `~/.cursor/mcp.json`
+- **Claude Code**: `mcpServers` entry in `~/.claude/settings.json` + runtime registration in `~/.claude.json`
+- **Codex**: `[mcp_servers.ai-memory]` in `~/.codex/config.toml`
 
 ### CLI (`cli.ts`)
 
@@ -348,12 +295,11 @@ Entry: `package.json` `"bin": "dist/cli.js"` → installed globally as `ai-memor
 | `conversation` | Get full transcript by ID |
 | `summarize` | Update conversation summary |
 | `title` | Update conversation title |
-| `import-transcripts` | Import JSONL from Cursor/Claude Code |
+| `import-transcripts` | Import JSONL from Cursor/Claude Code/Codex |
 | `status` | Health check and stats |
 | `usage` | MCP tool usage analytics (`--range 24h\|7d\|30d`) |
 | `clean-data` | Strip XML wrapper tags from titles/summaries (`--dry-run` supported) |
-| `mcp` | Start MCP stdio server |
-| `hook <event>` | IDE hook handler (see Hook Handlers) |
+| `mcp` | Start MCP stdio server (+ file watcher) |
 | `config get\|set\|list` | Read/write config values |
 | `dashboard` | Start local web UI |
 
@@ -364,43 +310,19 @@ Multi-phase setup command. Phases run in order:
 1. **Directories** — create `~/.ai-memory/` and `~/.ai-memory/services/`
 2. **Database** — create SQLite DB (optional `--reset-db` backs up existing DB first)
 3. **Config** — write `~/.ai-memory/config.json` with defaults if missing
-4. **IDE hooks + MCP** — register hooks and MCP server for selected IDE(s); for Codex, writes `notify` to `~/.codex/config.toml`
-5. **Skills** — write `SKILL.md` files for slash command support (`~/.<ide>/skills/ai-memory-*/` for Cursor/Claude Code, `~/.agents/skills/ai-memory-*/` for Codex)
-6. **Validation** — `checkHookPresence()` verifies registered hooks are present in config files. Reports per-IDE pass/fail. Missing hooks are recorded as `init_drift` warnings.
+4. **Stale hook cleanup** — remove any `ai-memory hook` entries from existing IDE configs (one-time migration)
+5. **IDE MCP** — register `ai-memory mcp` in selected IDE(s)
+6. **Skills** — write `SKILL.md` files for slash command support (`~/.<ide>/skills/ai-memory-*/` for Cursor/Claude Code, `~/.agents/skills/ai-memory-*/` for Codex)
 
-`--ide all` auto-detects installed IDEs by checking for `~/.cursor`, `~/.claude`, and `~/.codex` directories. Init is idempotent and self-repairing — re-running it on an existing installation detects and fixes drifted configs.
+`--ide all` auto-detects installed IDEs by checking for `~/.cursor`, `~/.claude`, and `~/.codex` directories. Init is idempotent — re-running it won't duplicate MCP entries.
 
 For Claude Code, MCP registration is dual-path:
-- `~/.claude/settings.json` — declarative MCP entry (used by hooks config)
-- Runtime registration via `claude mcp add -s user ai-memory` (so the `claude` CLI discovers the server), with fallback to writing `~/.claude.json` directly if the `claude` command is unavailable
-
-#### Per-IDE Stdin Adapter (`cli.ts`)
-
-Hook subcommands receive context from the IDE via stdin JSON. `parseIdeStdin(ide, raw, cliOpts)` maps IDE-specific fields to a typed `HookPayload`:
-
-| Field | Claude Code stdin | Cursor stdin | Codex notify (argv) |
-|-------|------------------|--------------|---------------------|
-| `sessionId` | `session_id` | `conversation_id` | `thread-id` |
-| `workspace` | `basename(cwd)` | `basename(workspace_roots[0])` | `basename(cwd)` |
-| `workspacePath` | `cwd` | `workspace_roots[0]` | `cwd` |
-| `assistantContent` (stop) | `last_assistant_message` | N/A (metadata only) | N/A |
-| `assistantContent` (afterAgentResponse) | N/A | `text` | N/A |
-| `assistantContent` (turn-complete) | N/A | N/A | `last-assistant-message` |
-| `prompt` | `prompt` | `prompt` | `input-messages[0]` |
-
-Each IDE has exactly one known field per datum — no fallback chains. Missing expected fields emit structured warnings to the `health_warnings` table.
-
-Output format varies: Claude Code hooks emit plain text, Cursor hooks emit JSON. Codex hooks are fire-and-forget (no output — `notify` system is one-way).
-
-#### Phantom Hook Detection
-
-When Claude Code runs as an extension inside a host IDE (Cursor, VSCode, Windsurf), both the host's native hooks AND Claude Code's `~/.claude/settings.json` hooks fire for the same event. This creates duplicate invocations with mismatched payloads.
-
-Detection uses `hook_event_name` convention: Claude Code sends PascalCase events (`SessionStart`, `UserPromptSubmit`, `Stop`), host IDEs send camelCase (`sessionStart`, `beforeSubmitPrompt`, `stop`). If `--ide claude-code` receives a camelCase event (or vice versa), the hook is a phantom and silently skipped.
+- `~/.claude/settings.json` — declarative MCP entry
+- Runtime registration via `claude mcp add -s user ai-memory`, with fallback to writing `~/.claude.json` directly if the `claude` command is unavailable
 
 ### MCP (`mcp/stdio.ts` + `mcp/server.ts`)
 
-[Model Context Protocol](https://modelcontextprotocol.io) server over stdio JSON-RPC. Registered by `ai-memory init` — for Cursor in `~/.cursor/mcp.json`, for Claude Code in both `settings.json` and via `claude mcp add` runtime registration.
+[Model Context Protocol](https://modelcontextprotocol.io) server over stdio JSON-RPC. Also hosts the file watcher that imports IDE transcripts automatically. Registered by `ai-memory init` — for Cursor in `~/.cursor/mcp.json`, for Claude Code in both `settings.json` and via `claude mcp add` runtime registration.
 
 5 tools with Zod-validated input schemas:
 
@@ -440,8 +362,7 @@ Node HTTP server serving a React SPA + a JSON-RPC endpoint. No authentication �
 | `listWorkspaces` | Distinct workspace query |
 | `setSummary` | `ConversationStore.upsertSummary()` |
 | `getConfig` / `updateConfig` | `loadConfig()` / `saveConfig()` |
-| `simulateInjection` | `InjectionService.buildForProjectKey()` |
-| `getStatus` / `getDashboardStatus` | `StatusService.getStatus()` + IDE integration checks |
+| `getStatus` / `getDashboardStatus` | `StatusService.getStatus()` + watcher status + MCP integration checks |
 | `getUsageDashboard` / `getUsageSummary` | `UsageService` methods |
 
 - **Client** (`dashboard/client/`): React 19 + Vite SPA, hash-based routing (`#/conversations`, `#/search`, `#/settings`, `#/usage`), inline styles, no external CSS framework
@@ -452,21 +373,15 @@ Node HTTP server serving a React SPA + a JSON-RPC endpoint. No authentication �
 
 These are architectural constraints that should be maintained:
 
-1. **Deterministic hooks** — Hook handlers never call an LLM. They only capture turns and inject bounded context. All hook behavior is predictable and instant.
-
-2. **Bounded injection** — Session-start injection is hard-capped by character counts (not token estimates). Limits are configurable but always enforced. No unbounded output.
-
-3. **Content-hash dedup** — Turns are deduplicated by `SHA-256(content)` per conversation. Import and capture are idempotent — running them twice produces no duplicates.
+1. **Content-hash dedup** — Turns are deduplicated by `SHA-256(content)` per conversation. Import and capture are idempotent — running them twice produces no duplicates.
 
 4. **Local-only storage** — All data lives in `~/.ai-memory/`. No network calls, no cloud sync, no telemetry. The database is a single SQLite file.
 
-5. **Thin adapters** — Adapters translate protocol-specific input to service calls and format the output. Adding a new adapter means mapping its protocol to `AppContext` methods. The CLI's stdin normalization layer and `clean-data` command are the main exceptions — they contain protocol bridging logic and direct SQL respectively.
+4. **Thin adapters** — Adapters translate protocol-specific input to service calls and format the output. Adding a new adapter means mapping its protocol to `AppContext` methods. The `clean-data` command is an exception — it contains direct SQL for bulk data cleanup.
 
-6. **Single store per aggregate** — `ConversationStore` owns both `conversations` and `turns` tables. It manages the FTS5 sync internally. New features should go through the store rather than writing SQL directly.
+5. **Single store per aggregate** — `ConversationStore` owns both `conversations` and `turns` tables. It manages the FTS5 sync internally. New features should go through the store rather than writing SQL directly.
 
-7. **Minimal shared state** — Services receive dependencies through constructors. Each `createApp()` call produces an independent context. The CLI uses a lazy `_app` singleton so `init` can run before the DB exists, but no other adapter shares state across operations.
-
-8. **Hooks never crash the IDE** — All hook CLI commands catch errors, log to stderr, and exit 0. A broken hook degrades silently rather than blocking the user's workflow.
+6. **Minimal shared state** — Services receive dependencies through constructors. Each `createApp()` call produces an independent context. The CLI uses a lazy `_app` singleton so `init` can run before the DB exists, but no other adapter shares state across operations.
 
 ---
 
@@ -476,10 +391,6 @@ Stored at `~/.ai-memory/config.json`. Created by `ai-memory init` with defaults 
 
 | Key | Default | Controls |
 |-----|---------|----------|
-| `injection_max_conversations` | `5` | Max conversations in session injection |
-| `injection_max_title_chars` | `80` | Title truncation length |
-| `injection_max_summary_chars` | `150` | Summary truncation length |
-| `injection_max_total_chars` | `1800` | Hard cap on injection output |
 | `search_default_limit` | `20` | Default search result count |
 
 Config flows through the system via `AiMemoryConfig` object passed to service constructors. `saveConfig()` writes the file (used by init and `config set`).
@@ -541,12 +452,10 @@ Tests use in-memory SQLite (`:memory:`) — no filesystem side effects. Test str
 | **FTS5** | SQLite Full-Text Search extension, version 5 |
 | **BM25** | Best Matching 25 — probabilistic relevance ranking function used by FTS5 |
 | **MCP** | Model Context Protocol — standard for IDE-to-tool communication |
-| **Injection** | Context automatically prepended to a new session (recent conversation titles + summaries) |
 | **Workspace** | Normalized project directory basename (not full path) — used as a human-readable label for grouping conversations |
 | **JSONL** | JSON Lines — one JSON object per line, used by Cursor and Claude Code for transcripts |
 | **external_id** | IDE-assigned session identifier, used for conversation dedup across imports and hooks |
 | **content_hash** | SHA-256 of turn content, used for turn-level dedup |
 | **project_key** | Stable project identifier — derived via `deriveProjectKey()`: `path:<sha1>` from absolute workspace path, `src:<token>` from IDE source path, or `ws:<label>` fallback from workspace label |
-| **tool_usage** | Per-call telemetry table for MCP tools and hooks — records latency, result count, and errors. Hook entries use `hook:<event>` naming |
-| **health_warnings** | Upsert-based table tracking integration health issues (missing fields, config drift, empty captures). Warnings are resolved when conditions clear |
-| **Phantom hook** | A duplicate hook invocation caused by Claude Code extension in a host IDE (Cursor, VSCode) firing `~/.claude/settings.json` hooks alongside the host's native hooks. Detected and silently dropped via `hook_event_name` convention mismatch |
+| **tool_usage** | Per-call telemetry table for MCP tools — records latency, result count, and errors. Watcher-triggered imports use `import:watch` tool name |
+| **health_warnings** | Upsert-based table tracking integration health issues (import errors, watcher errors). Warnings are resolved when conditions clear |
