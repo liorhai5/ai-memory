@@ -1,8 +1,0 @@
-{
-  "hook_event_name": "SessionStart",
-  "session_id": "claude-fixture-session-1",
-  "cwd": "/tmp/fixture-claude-workspace",
-  "permission_mode": "default",
-  "transcript_path": "/tmp/placeholder/claude-fixture-transcript.jsonl",
-  "source": "startup"
-}
