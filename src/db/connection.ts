@@ -22,6 +22,9 @@ export function createDb(dbPath = getDbPath()): Database.Database {
       db.exec(`ALTER TABLE conversations DROP COLUMN model;`);
     }
   }
+  // D044: WAL mode for concurrent reads during file-watch imports
+  db.pragma('journal_mode = WAL');
+  db.pragma('busy_timeout = 5000');
   db.exec(SCHEMA_SQL);
   return db;
 }

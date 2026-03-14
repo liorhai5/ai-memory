@@ -6,7 +6,7 @@
 
 AI coding assistants have no memory. Every session starts blank — they don't know what you discussed last week, what decisions were made, or what was tried and abandoned. You end up repeating context, re-explaining goals, and losing track of past work.
 
-ai-memory logs every conversation, makes it searchable, and injects recent context at session start. It captures full turn-level transcripts, supports full-text search, and lets the LLM write progressive summaries via MCP tools. It runs locally, stores everything on your machine, and works without any LLM involvement.
+ai-memory logs every conversation and makes it searchable. It watches IDE transcript directories and imports turns automatically, supports full-text search, and lets the LLM write progressive summaries via MCP tools. It runs locally, stores everything on your machine, and works without any LLM involvement.
 
 ---
 
@@ -41,36 +41,36 @@ ai-memory init --ide cursor
 ai-memory init --ide claude-code
 ai-memory init --ide codex
 
-# CLI-only (no IDE hooks)
+# CLI-only (no IDE integration)
 ai-memory init
 
 # Verify
 ai-memory status
 ```
 
-This creates `~/.ai-memory/` (database + config), registers global hooks (session lifecycle), adds the MCP server (LLM tools), and generates skill files (slash commands). Run once — it applies to all projects on this machine. Re-running is safe (idempotent).
+This creates `~/.ai-memory/` (database + config), registers the MCP server (LLM tools), and generates skill files (slash commands). Run once — it applies to all projects on this machine. Re-running is safe (idempotent).
 
 ---
 
 ## What Happens
 
 ```
-You talk to AI ──→ ai-memory captures turns ──→ Next session starts with context
-       ↑_________________________________________________________┘
+You talk to AI ──→ IDE writes transcript files ──→ ai-memory file-watcher picks them up
+       ↑                                                         │
+       └──── searchable history available to LLM via MCP ◄──────┘
 ```
 
-### Hook lifecycle
+### How capture works
 
-| Hook | What it does |
-|------|-------------|
-| **Session start** | Creates/resumes conversation by external ID. Injects recent conversation titles + summaries (project-first, then other recent). |
-| **Prompt submit** | Captures user turn. First turn sets title (truncated to 80 chars) and initial summary (full first message). |
-| **Stop** | Captures assistant turn (Claude Code: from `last_assistant_message`; Cursor: metadata-only). |
-| **After agent response** | Captures assistant turn from Cursor `stdin.text` (Cursor only). |
-| **Turn complete** | Captures both user + assistant turns in one call (Codex only, via `notify`). |
-| **Session end** | No-op (does not affect recency). |
+The MCP server (`ai-memory mcp`) watches three transcript directories:
 
-Hooks are fully deterministic — no LLM calls, no extraction, no scoring.
+| Directory | IDE |
+|-----------|-----|
+| `~/.claude/projects/` | Claude Code |
+| `~/.cursor/projects/` | Cursor |
+| `~/.codex/sessions/` | Codex |
+
+When a `.jsonl` file changes, the watcher imports it within 500ms (debounced). On startup, it also does a catch-up import of any transcripts written while the MCP server was offline. Import is idempotent — conversations are deduped by `external_id`, turns by `content_hash`.
 
 ### Summaries
 
@@ -87,7 +87,7 @@ Summaries are the only enrichment layer. They're written by the LLM or user via 
 
 ### With IDE (automatic)
 
-Once initialized, everything is automatic. Conversations are captured, context is injected at session start, and the LLM can search and summarize via MCP tools.
+Once initialized, everything is automatic. Conversations are captured as you work, and the LLM can search and summarize via MCP tools.
 
 ### With CLI
 
@@ -132,7 +132,7 @@ MCP is auto-configured by `ai-memory init --ide <name>`. The init command regist
 |-----|-------------------|
 | Cursor | `~/.cursor/mcp.json` |
 | Claude Code | `~/.claude/settings.json` |
-| Codex | `~/.codex/config.toml` (`notify` entry — capture only, no MCP) |
+| Codex | `~/.codex/config.toml` (`[mcp_servers.ai-memory]`) |
 
 <details>
 <summary>Manual setup (if not using init)</summary>
@@ -163,44 +163,9 @@ ai-memory config set <key> <value> # Change a value
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `injection_max_conversations` | `5` | Max conversations included in session-start injection |
-| `injection_max_title_chars` | `80` | Max characters per title (truncated with `...`) |
-| `injection_max_summary_chars` | `150` | Max characters per summary in injection |
-| `injection_max_total_chars` | `1800` | Hard cap on total injection output length |
 | `search_default_limit` | `20` | Default result count when `--limit` is not specified |
 
 Stored at `~/.ai-memory/config.json`.
-
----
-
-## Session Injection
-
-At session start, ai-memory injects recent conversation context:
-
-```
-<!-- p1:injected:begin -->
-Recent work (ai-memory):
-- "Fix caching bug in session service" (2026-03-09)
-  -> Chose Redis, 15min TTL, pub/sub invalidation. Open: deploy cache clear.
-- "Design the tagging model" (2026-03-09)
-  -> Decided no tags — workspace + date columns + FTS5 search.
-
-Other recent:
-- "Refactor API endpoints" (2026-03-08, ws: editor-platform)
-  -> [no summary]
-
-Use ai-memory-search to find past conversations.
-Use ai-memory-summarize after key progress.
-<!-- p1:injected:end -->
-```
-
-**Hard limits (deterministic, no token heuristics):**
-- Max 5 conversations
-- Max 80 chars per title
-- Max 150 chars per summary
-- Max 1800 chars total injection
-
-Current project conversations appear first, then other recent ones.
 
 ---
 
@@ -230,6 +195,7 @@ ai-memory import-transcripts --force-summary    # Overwrite existing summaries
 Sources:
 - Claude Code: `~/.claude/projects/*/*.jsonl`
 - Cursor: `~/.cursor/projects/*/agent-transcripts/*/*.jsonl`
+- Codex: `~/.codex/sessions/YYYY/MM/DD/*.jsonl`
 
 Import is idempotent — safe to rerun. Conversations are deduped by `external_id`, turns by `content_hash`. Reports `{created, updated, skipped, errors}`.
 
@@ -245,13 +211,12 @@ ai-memory conversations [--workspace ...] [--from ...] [--to ...] [--limit ...] 
 ai-memory conversation <id> [--json]
 ai-memory summarize <id> <summary> [--json]
 ai-memory title <id> <title> [--json]
-ai-memory import-transcripts [--source cursor|claude-code|all] [--force-summary] [--json]
+ai-memory import-transcripts [--source cursor|claude-code|codex|all] [--force-summary] [--json]
 ai-memory usage [--range 24h|7d|30d] [--json]
 ai-memory config get|set|list
 ai-memory clean-data [--dry-run] [--json]
 ai-memory dashboard [--port ...] [--no-open]
 ai-memory mcp
-ai-memory hook session-start|prompt-submit|stop|afterAgentResponse|turn-complete|session-end --ide <ide>
 ```
 
 ---
@@ -310,14 +275,12 @@ src/
 │   └── conversation-store.ts         CRUD for conversations and turns
 ├── services/
 │   ├── search-service.ts             FTS5 BM25 search + summary/title fallback
-│   ├── injection-service.ts          Bounded session-start context injection
-│   ├── import-service.ts             Transcript import from Cursor/Claude JSONL
+│   ├── import-service.ts             Transcript import from Cursor/Claude/Codex JSONL
 │   ├── status-service.ts             Health check and stats
 │   ├── usage-service.ts              MCP usage analytics
 │   └── config-service.ts             Configuration management
 ├── hooks/
-│   ├── handlers.ts                   IDE hook handlers (session-start, prompt-submit, stop, turn-complete)
-│   └── init-config.ts                IDE config + skill file generation
+│   └── init-config.ts                IDE MCP config + skill file generation
 ├── mcp/
 │   ├── server.ts                     MCP tool handlers
 │   └── stdio.ts                      MCP stdio transport + tool registration
@@ -340,8 +303,7 @@ src/
 1. **Conversation-first** — every session is a durable conversation with turn-level history
 2. **On-demand retrieval** — search and browse when you need it, no inference pipeline
 3. **LLM-assisted summaries** — summaries are written by LLM or user via MCP tool call
-4. **Deterministic hooks** — hooks only capture turns and inject bounded context, no LLM orchestration
-5. **Local and private** — all data stays on your machine
+4. **Local and private** — all data stays on your machine
 6. **Thin adapters** — CLI, dashboard, and MCP expose the same core services
 
 ---

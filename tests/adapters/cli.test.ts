@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -13,20 +13,47 @@ function runCli(args: string[], env: Record<string, string>, stdin?: string) {
   });
 }
 
+// Write a minimal Claude Code JSONL transcript to a temp dir
+function writeClaudeTranscript(home: string, uuid: string, workspace: string, turns: Array<{ type: 'user' | 'assistant'; content: string }>) {
+  const projectDir = join(home, '.claude', 'projects', `-Users-${workspace}`);
+  mkdirSync(projectDir, { recursive: true });
+  const lines = turns.map((t, i) => JSON.stringify({
+    type: t.type,
+    timestamp: new Date(Date.now() + i * 1000).toISOString(),
+    message: { content: [{ type: 'text', text: t.content }] }
+  }));
+  writeFileSync(join(projectDir, `${uuid}.jsonl`), lines.join('\n') + '\n');
+}
+
 describe('CLI commands', () => {
-  test('init + hook + conversations + search flow', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-new-'));
+  test('init creates directory structure and db', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-init-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
+
+    const result = runCli(['init', '--json'], env);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expect(existsSync(dbPath)).toBe(true);
+  });
+
+  test('import-transcripts + conversations + search flow', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-import-'));
     const dbPath = join(dir, '.ai-memory/services/memory.db');
     const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
 
     expect(runCli(['init', '--json'], env).status).toBe(0);
-    const startStdin = JSON.stringify({ conversation_id: 'conv-cli-1', workspace_roots: ['/tmp/my-workspace'] });
-    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
-    const promptStdin = JSON.stringify({ conversation_id: 'conv-cli-1', workspace_roots: ['/tmp/my-workspace'], prompt: 'Build search API' });
-    expect(runCli(['hook', 'prompt-submit', '--ide', 'cursor'], env, promptStdin).status).toBe(0);
-    // D038: Cursor uses afterAgentResponse for assistant content
-    const afterStdin = JSON.stringify({ conversation_id: 'conv-cli-1', workspace_roots: ['/tmp/my-workspace'], text: 'Implemented search' });
-    expect(runCli(['hook', 'afterAgentResponse', '--ide', 'cursor'], env, afterStdin).status).toBe(0);
+
+    writeClaudeTranscript(dir, 'conv-import-1', 'myproject', [
+      { type: 'user', content: 'Build a search API endpoint' },
+      { type: 'assistant', content: 'I implemented the search API' }
+    ]);
+
+    const importResult = runCli(['import-transcripts', '--source', 'claude-code', '--json'], env);
+    expect(importResult.status).toBe(0);
+    const importParsed = JSON.parse(importResult.stdout);
+    expect(importParsed.created).toBeGreaterThan(0);
 
     const conversations = runCli(['conversations', '--json'], env);
     expect(conversations.status).toBe(0);
@@ -39,55 +66,45 @@ describe('CLI commands', () => {
     expect(parsedSearch.conversations.length).toBeGreaterThan(0);
   });
 
-  // D038 D1: Cursor uses afterAgentResponse for assistant content, not stop hook
-  test('afterAgentResponse hook captures assistant content via stdin.text (Cursor)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-after-agent-'));
+  test('import-transcripts supports codex source', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-codex-import-'));
     const dbPath = join(dir, '.ai-memory/services/memory.db');
     const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
 
     expect(runCli(['init', '--json'], env).status).toBe(0);
-    const startStdin = JSON.stringify({ conversation_id: 'conv-cli-after', workspace_roots: ['/tmp/ws'] });
-    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
-    const promptStdin = JSON.stringify({ conversation_id: 'conv-cli-after', workspace_roots: ['/tmp/ws'], prompt: 'User asks question' });
-    expect(runCli(['hook', 'prompt-submit', '--ide', 'cursor'], env, promptStdin).status).toBe(0);
-    const afterStdin = JSON.stringify({ conversation_id: 'conv-cli-after', workspace_roots: ['/tmp/ws'], text: 'Assistant via afterAgentResponse' });
-    expect(runCli(['hook', 'afterAgentResponse', '--ide', 'cursor'], env, afterStdin).status).toBe(0);
 
-    const conv = JSON.parse(runCli(['conversations', '--json'], env).stdout).conversations[0];
-    const details = JSON.parse(runCli(['conversation', conv.id, '--json'], env).stdout);
-    expect(details.turns.map((t: { role: string }) => t.role)).toEqual(['user', 'assistant']);
-    expect(details.turns[1].content).toBe('Assistant via afterAgentResponse');
+    // Write a Codex JSONL transcript
+    const sessionDir = join(dir, '.codex', 'sessions', '2026', '03', '13');
+    mkdirSync(sessionDir, { recursive: true });
+    const threadId = 'codex-thread-test-1';
+    const lines = [
+      JSON.stringify({ timestamp: new Date().toISOString(), type: 'session_meta', payload: { id: threadId, cwd: '/tmp/myproject' } }),
+      JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'fix the auth bug' }] } }),
+      JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Fixed the bug in auth.ts' }] } }),
+    ];
+    writeFileSync(join(sessionDir, `rollout-123-${threadId}.jsonl`), lines.join('\n') + '\n');
+
+    const importResult = runCli(['import-transcripts', '--source', 'codex', '--json'], env);
+    expect(importResult.status).toBe(0);
+    const importParsed = JSON.parse(importResult.stdout);
+    expect(importParsed.created).toBe(1);
+
+    const convs = JSON.parse(runCli(['conversations', '--json'], env).stdout).conversations;
+    expect(convs.length).toBe(1);
+    expect(convs[0].ide).toBe('codex');
+    expect(convs[0].workspace).toBe('myproject');
   });
 
-  // D038 D2: Cursor stop hook is metadata-only — no assistant content capture
-  test('cursor stop hook does not capture assistant content (metadata only)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-cursor-stop-'));
-    const dbPath = join(dir, '.ai-memory/services/memory.db');
-    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
-
-    expect(runCli(['init', '--json'], env).status).toBe(0);
-    const startStdin = JSON.stringify({ conversation_id: 'conv-cursor-stop', workspace_roots: ['/tmp/ws'] });
-    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
-    const promptStdin = JSON.stringify({ conversation_id: 'conv-cursor-stop', workspace_roots: ['/tmp/ws'], prompt: 'User question' });
-    expect(runCli(['hook', 'prompt-submit', '--ide', 'cursor'], env, promptStdin).status).toBe(0);
-    const stopStdin = JSON.stringify({ conversation_id: 'conv-cursor-stop', workspace_roots: ['/tmp/ws'], status: 'completed' });
-    expect(runCli(['hook', 'stop', '--ide', 'cursor'], env, stopStdin).status).toBe(0);
-
-    const conv = JSON.parse(runCli(['conversations', '--json'], env).stdout).conversations[0];
-    const details = JSON.parse(runCli(['conversation', conv.id, '--json'], env).stdout);
-    expect(details.turns.map((t: { role: string }) => t.role)).toEqual(['user']);
-  });
-
-  test('title command updates title and returns errors for invalid input', () => {
+  test('title command updates title', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-title-'));
     const dbPath = join(dir, '.ai-memory/services/memory.db');
     const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
 
     expect(runCli(['init', '--json'], env).status).toBe(0);
-    const startStdin = JSON.stringify({ conversation_id: 'conv-cli-title', workspace_roots: ['/tmp/ws'] });
-    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
-    const promptStdin = JSON.stringify({ conversation_id: 'conv-cli-title', workspace_roots: ['/tmp/ws'], prompt: 'Initial prompt' });
-    expect(runCli(['hook', 'prompt-submit', '--ide', 'cursor'], env, promptStdin).status).toBe(0);
+    writeClaudeTranscript(dir, 'conv-title-1', 'ws', [
+      { type: 'user', content: 'Initial prompt' }
+    ]);
+    expect(runCli(['import-transcripts', '--source', 'claude-code', '--json'], env).status).toBe(0);
 
     const conv = JSON.parse(runCli(['conversations', '--json'], env).stdout).conversations[0];
     const ok = runCli(['title', conv.id, '  Better title   ', '--json'], env);
@@ -122,8 +139,6 @@ describe('CLI commands', () => {
     const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
 
     expect(runCli(['init', '--json'], env).status).toBe(0);
-    const startStdin = JSON.stringify({ conversation_id: 'conv-cli-usage', workspace_roots: ['/tmp/ws'] });
-    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
 
     const usage = runCli(['usage', '--range', '7d', '--json'], env);
     expect(usage.status).toBe(0);
@@ -133,79 +148,12 @@ describe('CLI commands', () => {
     expect(parsed).toHaveProperty('time_series');
   });
 
-  test('hooks do not create .ai-memory marker in workspace root', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-no-marker-'));
-    const workspaceDir = mkdtempSync(join(tmpdir(), 'ai-memory-workspace-'));
+  test('hook command no longer exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-no-hook-'));
     const dbPath = join(dir, '.ai-memory/services/memory.db');
     const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
-
-    expect(runCli(['init', '--json'], env).status).toBe(0);
-    const startStdin = JSON.stringify({ conversation_id: 'conv-no-marker', workspace_roots: [workspaceDir] });
-    expect(runCli(['hook', 'session-start', '--ide', 'cursor'], env, startStdin).status).toBe(0);
-    const promptStdin = JSON.stringify({
-      conversation_id: 'conv-no-marker',
-      workspace_roots: [workspaceDir],
-      prompt: 'No marker side effects'
-    });
-    expect(runCli(['hook', 'prompt-submit', '--ide', 'cursor'], env, promptStdin).status).toBe(0);
-    // D038: Cursor uses afterAgentResponse for assistant content
-    const afterStdin = JSON.stringify({
-      conversation_id: 'conv-no-marker',
-      workspace_roots: [workspaceDir],
-      text: 'Acknowledged'
-    });
-    expect(runCli(['hook', 'afterAgentResponse', '--ide', 'cursor'], env, afterStdin).status).toBe(0);
-
-    expect(existsSync(join(workspaceDir, '.ai-memory'))).toBe(false);
-  });
-
-  // D039: Codex turn-complete via argv payload
-  test('turn-complete hook captures Codex conversation via argv JSON', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-codex-'));
-    const dbPath = join(dir, '.ai-memory/services/memory.db');
-    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
-
-    expect(runCli(['init', '--json'], env).status).toBe(0);
-
-    const payload = JSON.stringify({
-      type: 'agent-turn-complete',
-      'thread-id': 'codex-thread-1',
-      'turn-id': 'turn-1',
-      cwd: '/tmp/my-project',
-      client: 'Codex Desktop',
-      'input-messages': ['fix the login bug'],
-      'last-assistant-message': 'I found the issue in auth.ts'
-    });
-    const result = runCli(['hook', 'turn-complete', '--ide', 'codex', payload], env);
-    expect(result.status).toBe(0);
-
-    const conv = JSON.parse(runCli(['conversations', '--json'], env).stdout).conversations[0];
-    expect(conv.ide).toBe('codex');
-    expect(conv.workspace).toBe('my-project');
-    const details = JSON.parse(runCli(['conversation', conv.id, '--json'], env).stdout);
-    expect(details.turns.map((t: { role: string }) => t.role)).toEqual(['user', 'assistant']);
-    expect(details.turns[0].content).toBe('fix the login bug');
-    expect(details.turns[1].content).toBe('I found the issue in auth.ts');
-  });
-
-  // D039: System prompt filter for Codex title-generation turns
-  test('turn-complete hook filters out Codex system/title-generation turns', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-codex-filter-'));
-    const dbPath = join(dir, '.ai-memory/services/memory.db');
-    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
-
-    expect(runCli(['init', '--json'], env).status).toBe(0);
-
-    const systemPayload = JSON.stringify({
-      'thread-id': 'codex-sys-1',
-      cwd: '/tmp/ws',
-      'input-messages': ['You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title for a task'],
-      'last-assistant-message': '{"title":"Fix login bug"}'
-    });
-    expect(runCli(['hook', 'turn-complete', '--ide', 'codex', systemPayload], env).status).toBe(0);
-
-    const convs = JSON.parse(runCli(['conversations', '--json'], env).stdout);
-    expect(convs.conversations.length).toBe(0);
+    const result = runCli(['hook', 'session-start', '--ide', 'cursor'], env);
+    expect(result.status).not.toBe(0);
   });
 
   test('init --ide claude-code syncs runtime MCP registry in ~/.claude.json', () => {
@@ -224,6 +172,32 @@ describe('CLI commands', () => {
     expect(settings.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
     expect(registry.mcpServers?.['ai-memory']?.command).toBe('ai-memory');
     expect(registry.mcpServers?.['ai-memory']?.args).toEqual(['mcp']);
+
+    // No hooks section written (D044)
+    expect(settings.hooks).toBeUndefined();
   });
 
+  test('init --ide claude-code does not write hooks to settings.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-no-hooks-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
+
+    runCli(['init', '--ide', 'claude-code', '--json'], env);
+
+    const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.json'), 'utf8'));
+    expect(settings.hooks).toBeUndefined();
+  });
+
+  test('init --ide cursor does not write hooks.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-no-cursor-hooks-'));
+    const dbPath = join(dir, '.ai-memory/services/memory.db');
+    const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
+    // Create .cursor dir so it's detected
+    mkdirSync(join(dir, '.cursor'), { recursive: true });
+
+    runCli(['init', '--ide', 'cursor', '--json'], env);
+
+    expect(existsSync(join(dir, '.cursor', 'hooks.json'))).toBe(false);
+    expect(existsSync(join(dir, '.cursor', 'mcp.json'))).toBe(true);
+  });
 });

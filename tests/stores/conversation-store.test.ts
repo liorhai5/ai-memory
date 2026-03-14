@@ -74,7 +74,7 @@ describe('ConversationStore', () => {
     const { app } = createTempApp();
     const conv = createConversation(app, { external_id: 'c6' });
     app.conversationStore.updateTitle(conv.id, `   ${'a'.repeat(100)}   `);
-    expect(app.conversationStore.byId(conv.id)!.title).toBe('a'.repeat(app.config.injection_max_title_chars));
+    expect(app.conversationStore.byId(conv.id)!.title).toBe('a'.repeat(80));
   });
 
   test('updateTitle rejects blank title', () => {

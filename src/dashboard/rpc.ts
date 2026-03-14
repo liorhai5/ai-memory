@@ -1,7 +1,6 @@
 import type { AppContext } from '../app.js';
 import { saveConfig } from '../services/config-service.js';
 import { SearchService } from '../services/search-service.js';
-import { InjectionService } from '../services/injection-service.js';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -29,8 +28,6 @@ export function handleRpc(
         return { ok: true, result: listIdes(ctx) };
       case 'setSummary':
         return { ok: true, result: setSummary(ctx, params) };
-      case 'simulateInjection':
-        return { ok: true, result: simulateInjection(ctx, params) };
       case 'getConfig':
         return { ok: true, result: { config: ctx.config } };
       case 'updateConfig':
@@ -123,44 +120,12 @@ function listIdes(ctx: AppContext) {
   return { ides: rows.map((r) => r.ide) };
 }
 
-function simulateInjection(ctx: AppContext, params: Record<string, unknown>) {
-  const workspace = (params.workspace as string | undefined) ?? undefined;
-  const limits = {
-    max_conversations: Number(params.max_conversations ?? ctx.config.injection_max_conversations),
-    max_title_chars: Number(params.max_title_chars ?? ctx.config.injection_max_title_chars),
-    max_summary_chars: Number(params.max_summary_chars ?? ctx.config.injection_max_summary_chars),
-    max_total_chars: Number(params.max_total_chars ?? ctx.config.injection_max_total_chars),
-  };
-  const output = ctx.injectionService.buildForWorkspace(workspace ?? null, limits);
-  return { output, limits, chars: output.length };
-}
-
-function parseNumberParam(params: Record<string, unknown>, key: string): number | undefined {
-  if (typeof params[key] === 'undefined') return undefined;
-  const value = Number(params[key]);
-  if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`Invalid ${key}: expected non-negative number`);
-  }
-  return value;
-}
-
 function updateConfig(ctx: AppContext, params: Record<string, unknown>) {
-  const nextConfig = {
-    ...ctx.config,
-    injection_max_conversations:
-      parseNumberParam(params, 'injection_max_conversations') ?? ctx.config.injection_max_conversations,
-    injection_max_title_chars:
-      parseNumberParam(params, 'injection_max_title_chars') ?? ctx.config.injection_max_title_chars,
-    injection_max_summary_chars:
-      parseNumberParam(params, 'injection_max_summary_chars') ?? ctx.config.injection_max_summary_chars,
-    injection_max_total_chars:
-      parseNumberParam(params, 'injection_max_total_chars') ?? ctx.config.injection_max_total_chars
-  };
+  const nextConfig = { ...ctx.config };
 
   saveConfig(nextConfig);
   ctx.config = nextConfig;
   ctx.searchService = new SearchService(ctx.db, nextConfig);
-  ctx.injectionService = new InjectionService(ctx.conversationStore, nextConfig);
 
   return { config: nextConfig };
 }
@@ -174,21 +139,6 @@ function safeJson(path: string): { exists: boolean; json: any | null; error: str
   }
 }
 
-function hasHookCommand(entries: any, cmd: string): boolean {
-  if (!Array.isArray(entries)) return false;
-  return entries.some((e: any) => e && typeof e.command === 'string' && e.command === cmd);
-}
-
-function hasGroupedHookCommand(entries: any, cmd: string, matcher?: string): boolean {
-  if (!Array.isArray(entries)) return false;
-  return entries.some((group: any) => {
-    if (!group || typeof group !== 'object') return false;
-    if (typeof matcher !== 'undefined' && group.matcher !== matcher) return false;
-    if (!Array.isArray(group.hooks)) return false;
-    return group.hooks.some((hook: any) => hook && typeof hook.command === 'string' && hook.command === cmd);
-  });
-}
-
 function readRawFile(path: string): { exists: boolean; content: string | null; error: string | null } {
   if (!existsSync(path)) return { exists: false, content: null, error: null };
   try {
@@ -198,85 +148,71 @@ function readRawFile(path: string): { exists: boolean; content: string | null; e
   }
 }
 
-function buildIntegrationStatus() {
+// D044 D12: Watcher status replaces hook validation
+function buildWatcherStatus(ctx: AppContext) {
   const home = homedir();
-  const cursorHooksPath = join(home, '.cursor', 'hooks.json');
+  const watchedDirs = [
+    `${home}/.claude/projects`,
+    `${home}/.cursor/projects`,
+    `${home}/.codex/sessions`,
+  ].map((path) => ({ path, exists: existsSync(path) }));
+
+  const lastImport = ctx.db.prepare(
+    `SELECT MAX(source_mtime) AS last_import_at FROM conversations WHERE source_mtime IS NOT NULL`
+  ).get() as { last_import_at: string | null };
+
+  const importErrorCount = (() => {
+    try {
+      return (ctx.db.prepare(
+        `SELECT COUNT(*) AS c FROM health_warnings WHERE category IN ('import_parse_error', 'watcher_error') AND resolved_at IS NULL`
+      ).get() as { c: number }).c;
+    } catch { return 0; }
+  })();
+
+  return {
+    watched_dirs: watchedDirs,
+    last_import_at: lastImport.last_import_at,
+    import_error_count: importErrorCount,
+  };
+}
+
+// D044 D8: MCP integration status (without hooks)
+function buildIntegrationStatus(ctx: AppContext) {
+  const home = homedir();
   const cursorMcpPath = join(home, '.cursor', 'mcp.json');
   const claudeSettingsPath = join(home, '.claude', 'settings.json');
   const claudeRegistryPath = join(home, '.claude.json');
+  const codexConfigPath = join(home, '.codex', 'config.toml');
 
-  const cursorHooks = safeJson(cursorHooksPath);
   const cursorMcp = safeJson(cursorMcpPath);
   const claudeSettings = safeJson(claudeSettingsPath);
   const claudeRegistry = safeJson(claudeRegistryPath);
-
-  const cursorJson = cursorHooks.json ?? {};
-  const cursorHookData = cursorJson.hooks ?? {};
-  const cursorExpected = {
-    beforeSubmitPrompt: 'ai-memory hook prompt-submit --ide cursor',
-    sessionStart: 'ai-memory hook session-start --ide cursor',
-    stop: 'ai-memory hook stop --ide cursor',
-    sessionEnd: 'ai-memory hook session-end --ide cursor'
-  };
-
-  const claudeJson = claudeSettings.json ?? {};
-  const claudeHookData = claudeJson.hooks ?? {};
-  const claudeExpected = {
-    UserPromptSubmit: 'ai-memory hook prompt-submit --ide claude-code',
-    SessionStart: 'ai-memory hook session-start --ide claude-code',
-    Stop: 'ai-memory hook stop --ide claude-code',
-    SessionEnd: 'ai-memory hook session-end --ide claude-code'
-  };
-
-  // D041: Codex integration check
-  const codexConfigPath = join(home, '.codex', 'config.toml');
   const codexConfig = readRawFile(codexConfigPath);
-  const codexNotifyConfigured = Boolean(codexConfig.content && /^notify\s*=.*ai-memory/m.test(codexConfig.content));
 
   return {
     cursor: {
-      hooks_file: cursorHooksPath,
       mcp_file: cursorMcpPath,
-      hooks_file_exists: cursorHooks.exists,
       mcp_file_exists: cursorMcp.exists,
-      hooks_parse_error: cursorHooks.error,
+      mcp_configured: Boolean(cursorMcp.json?.mcpServers?.['ai-memory']),
       mcp_parse_error: cursorMcp.error,
-      hooks: {
-        beforeSubmitPrompt: hasHookCommand(cursorHookData.beforeSubmitPrompt, cursorExpected.beforeSubmitPrompt),
-        sessionStart: hasHookCommand(cursorHookData.sessionStart, cursorExpected.sessionStart),
-        stop: hasHookCommand(cursorHookData.stop, cursorExpected.stop),
-        sessionEnd: hasHookCommand(cursorHookData.sessionEnd, cursorExpected.sessionEnd)
-      },
-      mcp_configured: Boolean(cursorMcp.json?.mcpServers?.['ai-memory'])
     },
     claude_code: {
       settings_file: claudeSettingsPath,
       settings_exists: claudeSettings.exists,
-      settings_parse_error: claudeSettings.error,
-      hooks: {
-        UserPromptSubmit: hasGroupedHookCommand(claudeHookData.UserPromptSubmit, claudeExpected.UserPromptSubmit),
-        SessionStart: hasGroupedHookCommand(
-          claudeHookData.SessionStart,
-          claudeExpected.SessionStart,
-          'startup|resume|clear|compact'
-        ),
-        Stop: hasGroupedHookCommand(claudeHookData.Stop, claudeExpected.Stop),
-        SessionEnd: hasGroupedHookCommand(claudeHookData.SessionEnd, claudeExpected.SessionEnd)
-      },
       settings_mcp_configured: Boolean(claudeSettings.json?.mcpServers?.['ai-memory']),
       registry_file: claudeRegistryPath,
       registry_exists: claudeRegistry.exists,
-      registry_parse_error: claudeRegistry.error,
       registry_mcp_configured: Boolean(claudeRegistry.json?.mcpServers?.['ai-memory']),
-      mcp_configured: Boolean(claudeSettings.json?.mcpServers?.['ai-memory']) && Boolean(claudeRegistry.json?.mcpServers?.['ai-memory'])
+      mcp_configured: Boolean(claudeSettings.json?.mcpServers?.['ai-memory']) && Boolean(claudeRegistry.json?.mcpServers?.['ai-memory']),
+      settings_parse_error: claudeSettings.error,
+      registry_parse_error: claudeRegistry.error,
     },
     codex: {
       config_file: codexConfigPath,
       config_exists: codexConfig.exists,
-      notify_configured: codexNotifyConfigured,
       mcp_configured: Boolean(codexConfig.content && codexConfig.content.includes('[mcp_servers.ai-memory]')),
-      config_parse_error: codexConfig.error
-    }
+      config_parse_error: codexConfig.error,
+    },
   };
 }
 
@@ -361,7 +297,8 @@ function getDashboardStatus(ctx: AppContext) {
       last_24h_conversations: c24.c,
       last_7d_conversations: c7.c
     },
-    integrations: buildIntegrationStatus(),
+    integrations: buildIntegrationStatus(ctx),
+    watcher: buildWatcherStatus(ctx),
     skills: buildSkillsStatus(),
     config_snapshot: {
       ...ctx.config,

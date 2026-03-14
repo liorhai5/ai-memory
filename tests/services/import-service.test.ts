@@ -151,3 +151,147 @@ describe('ImportService (D12, D14)', () => {
     }
   });
 });
+
+// D044 D2: Codex JSONL parser tests
+describe('ImportService — Codex JSONL parser', () => {
+  function writeCodexTranscript(homeDir: string, date: string, filename: string, lines: object[]) {
+    const [year, month, day] = date.split('-');
+    const sessionDir = join(homeDir, '.codex', 'sessions', year, month, day);
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, filename), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  }
+
+  test('parses Codex JSONL and creates conversation with turns', () => {
+    const { app, dir } = setupImportTest();
+    const threadId = 'codex-thread-abc';
+    writeCodexTranscript(dir, '2026-03-09', `rollout-123-${threadId}.jsonl`, [
+      { timestamp: '2026-03-09T10:00:00Z', type: 'session_meta', payload: { id: threadId, cwd: '/home/user/myproject' } },
+      { timestamp: '2026-03-09T10:01:00Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'fix the auth bug' }] } },
+      { timestamp: '2026-03-09T10:02:00Z', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Fixed the bug in auth.ts' }] } }
+    ]);
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      const report = app.importService.importTranscripts('codex');
+      expect(report.created).toBe(1);
+      expect(report.errors).toBe(0);
+
+      const conv = app.conversationStore.byExternalId(threadId);
+      expect(conv).not.toBeNull();
+      expect(conv!.ide).toBe('codex');
+      expect(conv!.workspace).toBe('myproject');
+      expect(conv!.title).toBe('fix the auth bug');
+
+      const turns = app.conversationStore.listTurns(conv!.id);
+      expect(turns).toHaveLength(2);
+      expect(turns[0].role).toBe('user');
+      expect(turns[0].content).toBe('fix the auth bug');
+      expect(turns[1].role).toBe('assistant');
+      expect(turns[1].content).toBe('Fixed the bug in auth.ts');
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  test('skips developer/system role turns', () => {
+    const { app, dir } = setupImportTest();
+    const threadId = 'codex-thread-dev';
+    writeCodexTranscript(dir, '2026-03-09', `rollout-dev-${threadId}.jsonl`, [
+      { timestamp: '2026-03-09T10:00:00Z', type: 'session_meta', payload: { id: threadId, cwd: '/home/user/proj' } },
+      { timestamp: '2026-03-09T10:01:00Z', type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'System instructions here' }] } },
+      { timestamp: '2026-03-09T10:02:00Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'user question' }] } },
+    ]);
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      app.importService.importTranscripts('codex');
+      const conv = app.conversationStore.byExternalId(threadId)!;
+      const turns = app.conversationStore.listTurns(conv.id);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].role).toBe('user');
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  test('skips function_call and reasoning response_items', () => {
+    const { app, dir } = setupImportTest();
+    const threadId = 'codex-thread-skip';
+    writeCodexTranscript(dir, '2026-03-09', `rollout-skip-${threadId}.jsonl`, [
+      { timestamp: '2026-03-09T10:00:00Z', type: 'session_meta', payload: { id: threadId, cwd: '/home/user/proj' } },
+      { timestamp: '2026-03-09T10:01:00Z', type: 'response_item', payload: { type: 'function_call', content: [] } },
+      { timestamp: '2026-03-09T10:02:00Z', type: 'response_item', payload: { type: 'reasoning', content: [] } },
+      { timestamp: '2026-03-09T10:03:00Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'real user message' }] } },
+    ]);
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      app.importService.importTranscripts('codex');
+      const conv = app.conversationStore.byExternalId(threadId)!;
+      const turns = app.conversationStore.listTurns(conv.id);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].content).toBe('real user message');
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  test('skips Codex files with no session_meta or no turns', () => {
+    const { app, dir } = setupImportTest();
+    writeCodexTranscript(dir, '2026-03-09', 'no-meta.jsonl', [
+      { timestamp: '2026-03-09T10:01:00Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'orphan' }] } },
+    ]);
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      const report = app.importService.importTranscripts('codex');
+      expect(report.skipped).toBeGreaterThan(0);
+      expect(report.created).toBe(0);
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  test('is idempotent for Codex transcripts', () => {
+    const { app, dir } = setupImportTest();
+    const threadId = 'codex-idempotent-1';
+    writeCodexTranscript(dir, '2026-03-09', `rollout-idem-${threadId}.jsonl`, [
+      { timestamp: '2026-03-09T10:00:00Z', type: 'session_meta', payload: { id: threadId, cwd: '/home/user/proj' } },
+      { timestamp: '2026-03-09T10:01:00Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'test' }] } },
+    ]);
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      const first = app.importService.importTranscripts('codex');
+      expect(first.created).toBe(1);
+      const second = app.importService.importTranscripts('codex');
+      expect(second.updated).toBe(1);
+      expect(second.created).toBe(0);
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  test('importTranscripts all includes codex', () => {
+    const { app, dir } = setupImportTest();
+    const threadId = 'codex-in-all';
+    writeCodexTranscript(dir, '2026-03-09', `rollout-all-${threadId}.jsonl`, [
+      { timestamp: '2026-03-09T10:00:00Z', type: 'session_meta', payload: { id: threadId, cwd: '/home/user/proj' } },
+      { timestamp: '2026-03-09T10:01:00Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'from all' }] } },
+    ]);
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      const report = app.importService.importTranscripts('all');
+      expect(report.created).toBe(1);
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+});

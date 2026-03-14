@@ -6,6 +6,7 @@ import { normalizeWorkspaceLabel } from '../utils/workspace-identity.js';
 export interface SearchResult {
   conversations: SearchConversationMatch[];
   total: number;
+  has_more: boolean;
 }
 
 function sanitizeFtsQuery(query: string): string {
@@ -89,11 +90,11 @@ export class SearchService {
           match_source: 'turn',
           matching_turns: [{ role: row.role, content: row.content, turn_number: row.turn_number }]
         });
-        if (rows.length >= limit + offset) break;
+        if (rows.length >= limit + offset + 1) break;
       }
     }
 
-    if (query.length > 0 && rows.length < limit + offset) {
+    if (query.length > 0 && rows.length < limit + offset + 1) {
       const like = `%${query}%`;
       const where: string[] = ['(summary LIKE ? OR title LIKE ?)'];
       const params: unknown[] = [like, like];
@@ -139,14 +140,16 @@ export class SearchService {
           match_source: source,
           matching_turns: []
         });
-        if (rows.length >= limit + offset) break;
+        if (rows.length >= limit + offset + 1) break;
       }
     }
 
-    const total = rows.length;
+    const has_more = rows.length > limit + offset;
+    const page = rows.slice(offset, offset + limit);
     return {
-      conversations: rows.slice(offset, offset + limit),
-      total
+      conversations: page,
+      total: page.length,
+      has_more
     };
   }
 }
