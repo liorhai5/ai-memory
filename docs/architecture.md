@@ -273,7 +273,7 @@ ai-memory import-transcripts
 
 ### Init Config (`hooks/init-config.ts`)
 
-Registers MCP server for each IDE and writes skill files for slash command support. On `init` run, also removes any stale `ai-memory hook` entries from existing IDE config files (one-time migration for users upgrading from the hook-based system):
+Registers MCP server for each IDE and writes skill files for slash command support:
 
 - **Cursor**: MCP in `~/.cursor/mcp.json`
 - **Claude Code**: `mcpServers` entry in `~/.claude/settings.json` + runtime registration in `~/.claude.json`
@@ -310,9 +310,8 @@ Multi-phase setup command. Phases run in order:
 1. **Directories** — create `~/.ai-memory/` and `~/.ai-memory/services/`
 2. **Database** — create SQLite DB (optional `--reset-db` backs up existing DB first)
 3. **Config** — write `~/.ai-memory/config.json` with defaults if missing
-4. **Stale hook cleanup** — remove any `ai-memory hook` entries from existing IDE configs (one-time migration)
-5. **IDE MCP** — register `ai-memory mcp` in selected IDE(s)
-6. **Skills** — write `SKILL.md` files for slash command support (`~/.<ide>/skills/ai-memory-*/` for Cursor/Claude Code, `~/.agents/skills/ai-memory-*/` for Codex)
+4. **IDE MCP** — register `ai-memory mcp` in selected IDE(s)
+5. **Skills** — write `SKILL.md` files for slash command support (`~/.<ide>/skills/ai-memory-*/` for Cursor/Claude Code, `~/.agents/skills/ai-memory-*/` for Codex)
 
 `--ide all` auto-detects installed IDEs by checking for `~/.cursor`, `~/.claude`, and `~/.codex` directories. Init is idempotent — re-running it won't duplicate MCP entries.
 
@@ -454,7 +453,7 @@ Tests use in-memory SQLite (`:memory:`) — no filesystem side effects. Test str
 | **MCP** | Model Context Protocol — standard for IDE-to-tool communication |
 | **Workspace** | Normalized project directory basename (not full path) — used as a human-readable label for grouping conversations |
 | **JSONL** | JSON Lines — one JSON object per line, used by Cursor and Claude Code for transcripts |
-| **external_id** | IDE-assigned session identifier, used for conversation dedup across imports and hooks |
+| **external_id** | IDE-assigned session identifier, used for conversation dedup across imports |
 | **content_hash** | SHA-256 of turn content, used for turn-level dedup |
 | **project_key** | Stable project identifier — derived via `deriveProjectKey()`: `path:<sha1>` from absolute workspace path, `src:<token>` from IDE source path, or `ws:<label>` fallback from workspace label |
 | **tool_usage** | Per-call telemetry table for MCP tools — records latency, result count, and errors. Watcher-triggered imports use `import:watch` tool name |
