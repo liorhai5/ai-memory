@@ -249,7 +249,7 @@ Five tables + one FTS index:
 - `conversations` — id, external_id, project_key, workspace, ide, source_path, source_mtime, title, summary, turn_count, started_at, updated_at
 - `turns` — id, conversation_id, role (`user|assistant|system`), content, content_hash, turn_number, created_at
 - `turns_fts` — FTS5 virtual table on turn content (BM25 search)
-- `tool_usage` — MCP and hook telemetry (latency, result counts, success/error type) used by `ai-memory usage`
+- `tool_usage` — MCP and import telemetry (latency, result counts, success/error type) used by `ai-memory usage`
 - `health_warnings` — integration health tracking (missing fields, config drift, empty captures) with upsert/resolve semantics
 
 ---
@@ -258,7 +258,7 @@ Five tables + one FTS index:
 
 ```bash
 npm run build:all # TypeScript + dashboard assets → dist/
-npm test          # 176 tests across 20 suites
+npm test          # Vitest — all suites
 ```
 
 ### Project Structure
