@@ -1,6 +1,0 @@
-{
-  "hook_event_name": "UserPromptSubmit",
-  "session_id": "claude-fixture-session-1",
-  "cwd": "/tmp/fixture-claude-workspace",
-  "prompt": "Investigate assistant turn capture drift"
-}
