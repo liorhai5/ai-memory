@@ -131,7 +131,6 @@ Single data access class for the `conversations` and `turns` tables. Key operati
 - `setTitleIfEmpty()` — auto-title from first user message (init only)
 - `updateTitle()` — replace conversation title (manual/LLM refresh)
 - `upsertSummary()` — replace conversation summary
-- `listRecentByProjectKey()` — project-key-first ordering (falls back to `listRecentByWorkspace()` when `project_key` is null)
 - `pruneEmptyConversations()` — delete conversations with 0 turns, no title, older than 1 hour (called after import to clean up stale upserts)
 
 ### SearchService (`services/search-service.ts`)
@@ -153,10 +152,12 @@ Idempotent — deduplicates conversations by `external_id`, turns by `content_ha
 
 ### Workspace Identity (`utils/workspace-identity.ts`)
 
-Normalizes workspace labels and derives project keys. Key behaviors:
+Resolves workspace names from IDE transcript paths. Key behaviors:
 
 - `normalizeWorkspaceLabel()` — strips paths to basename, removes leading `-` prefixes from Claude folder names
-- `deriveProjectKey()` — three-tier derivation: `path:<sha1>` from absolute workspace path (most stable), `src:<token>` from IDE source path, or `ws:<label>` fallback from workspace label
+- `extractCwdFromTranscript()` — extracts working directory from JSONL transcript lines (Claude Code `row.cwd`, Codex `session_meta.payload.cwd`)
+- `probeTokenToPath()` — greedy left-to-right filesystem probe to decode IDE project tokens (e.g., `Users-liorha-Projects-ai-memory` → `/Users/liorha/Projects/ai-memory`)
+- `resolveWorkspace()` — three-tier resolution: `cwd` from transcript (most reliable) > filesystem probe of IDE token > raw token fallback
 
 ---
 
@@ -170,8 +171,8 @@ Normalizes workspace labels and derives project keys. Key behaviors:
 ├─────────────────────────┤       ├─────────────────────────┤
 │ id           TEXT PK    │──┐    │ id           TEXT PK    │
 │ external_id  TEXT UNIQUE│  │    │ conversation_id TEXT FK ◄─┘
-│ project_key  TEXT       │  │    │ role         TEXT       │
-│ workspace    TEXT       │  │    │ content      TEXT       │
+│ workspace    TEXT       │  │    │ role         TEXT       │
+│ workspace_path TEXT     │  │    │ content      TEXT       │
 │ ide          TEXT       │  │    │ content_hash TEXT       │
 │ source_path  TEXT       │  │    │ turn_number  INTEGER    │
 │ source_mtime TEXT       │  │    │ created_at   TEXT       │
@@ -207,7 +208,6 @@ Normalizes workspace labels and derives project keys. Key behaviors:
 - `(content_hash, conversation_id)` is UNIQUE — prevents duplicate turns on reimport
 - `turns_fts` is a virtual table synced manually on each `addTurn()` call
 - Foreign key: `turns.conversation_id` → `conversations.id`
-- `project_key` is indexed — used for project-scoped queries and injection grouping
 - `(tool_name, called_at)` is indexed on `tool_usage` — used for time-windowed usage analytics. Watcher-triggered imports use `import:watch` naming
 - `(category, message)` is UNIQUE on `health_warnings` — deduplicates warnings, upsert updates `last_seen_at`
 
@@ -271,12 +271,12 @@ ai-memory import-transcripts
 
 ## Adapter Details
 
-### Init Config (`hooks/init-config.ts`)
+### Init Config (`mcp/init-config.ts`)
 
 Registers MCP server for each IDE and writes skill files for slash command support:
 
 - **Cursor**: MCP in `~/.cursor/mcp.json`
-- **Claude Code**: `mcpServers` entry in `~/.claude/settings.json` + runtime registration in `~/.claude.json`
+- **Claude Code**: MCP via `claude mcp add` → `~/.claude.json`
 - **Codex**: `[mcp_servers.ai-memory]` in `~/.codex/config.toml`
 
 ### CLI (`cli.ts`)
@@ -455,6 +455,6 @@ Tests use in-memory SQLite (`:memory:`) — no filesystem side effects. Test str
 | **JSONL** | JSON Lines — one JSON object per line, used by Cursor and Claude Code for transcripts |
 | **external_id** | IDE-assigned session identifier, used for conversation dedup across imports |
 | **content_hash** | SHA-256 of turn content, used for turn-level dedup |
-| **project_key** | Stable project identifier — derived via `deriveProjectKey()`: `path:<sha1>` from absolute workspace path, `src:<token>` from IDE source path, or `ws:<label>` fallback from workspace label |
+| **workspace_path** | Full absolute path to the project directory — resolved via `resolveWorkspace()` from transcript `cwd` or filesystem probe of IDE token. Enables cross-IDE matching and workspace re-derivation |
 | **tool_usage** | Per-call telemetry table for MCP tools — records latency, result count, and errors. Watcher-triggered imports use `import:watch` tool name |
 | **health_warnings** | Upsert-based table tracking integration health issues (import errors, watcher errors). Warnings are resolved when conditions clear |

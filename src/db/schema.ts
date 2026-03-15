@@ -4,8 +4,8 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
   external_id TEXT UNIQUE,
-  project_key TEXT,
   workspace TEXT,
+  workspace_path TEXT,
   ide TEXT,                     -- cursor|claude-code|cli
   source_path TEXT,
   source_mtime TEXT,
@@ -31,9 +31,6 @@ ON turns(content_hash, conversation_id);
 
 CREATE INDEX IF NOT EXISTS idx_turns_conversation
 ON turns(conversation_id, turn_number);
-
-CREATE INDEX IF NOT EXISTS idx_conversations_project_key
-ON conversations(project_key);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(
   id UNINDEXED,

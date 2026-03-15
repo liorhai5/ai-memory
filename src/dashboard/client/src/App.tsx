@@ -3,11 +3,12 @@ import { ConversationsView } from './views/ConversationsView';
 import { SearchView } from './views/SearchView';
 import { StatusView } from './views/StatusView';
 import { UsageView } from './views/UsageView';
+import { ProjectsView } from './views/ProjectsView';
 import { readHash } from './url-state';
 import { type ViewRefreshState } from './refresh';
 import { rpc } from './rpc';
 
-type View = 'conversations' | 'search' | 'status' | 'usage';
+type View = 'conversations' | 'search' | 'projects' | 'status' | 'usage';
 
 function ChatIcon() {
   return (
@@ -27,6 +28,15 @@ function SearchIcon() {
     <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
       <circle cx="11" cy="11" r="6.25" />
       <path d="m16 16 3.5 3.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ProjectsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M3.75 9.75h16.5M3.75 14.25h16.5" strokeLinecap="round" />
+      <rect x="3.75" y="4.75" width="16.5" height="14.5" rx="2" />
     </svg>
   );
 }
@@ -54,6 +64,7 @@ function UsageIcon() {
 const NAV_ITEMS: Array<{ id: View; label: string; icon: ReactNode }> = [
   { id: 'conversations', label: 'Conversations', icon: <ChatIcon /> },
   { id: 'search', label: 'Search', icon: <SearchIcon /> },
+  { id: 'projects', label: 'Projects', icon: <ProjectsIcon /> },
   { id: 'status', label: 'Status', icon: <StatusIcon /> },
   { id: 'usage', label: 'Usage', icon: <UsageIcon /> },
 ];
@@ -161,6 +172,12 @@ export function App() {
             <SearchView
               active={view === 'search'}
               onRefreshStateChange={(state) => onRefreshStateChange('search', state)}
+            />
+          </div>
+          <div style={{ display: view === 'projects' ? 'contents' : 'none' }}>
+            <ProjectsView
+              active={view === 'projects'}
+              onRefreshStateChange={(state) => onRefreshStateChange('projects', state)}
             />
           </div>
           <div style={{ display: view === 'status' ? 'contents' : 'none' }}>

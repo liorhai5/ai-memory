@@ -21,21 +21,6 @@ export function registerCursorMcp(mcpFilePath: string): { updated: boolean } {
   return { updated: true };
 }
 
-// Registers MCP server for Claude Code (writes mcpServers to settings.json)
-export function registerClaudeCodeMcp(settingsFilePath: string): { updated: boolean } {
-  const dir = dirname(settingsFilePath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  let data: any = {};
-  if (existsSync(settingsFilePath)) {
-    data = JSON.parse(readFileSync(settingsFilePath, 'utf8'));
-  }
-  data.mcpServers ??= {};
-  if (data.mcpServers['ai-memory']) return { updated: false };
-  data.mcpServers['ai-memory'] = { command: 'ai-memory', args: ['mcp'] };
-  writeFileSync(settingsFilePath, JSON.stringify(data, null, 2));
-  return { updated: true };
-}
-
 // Registers MCP server for Codex (writes [mcp_servers.ai-memory] to config.toml)
 export function registerCodexMcp(configPath: string): { status: 'created' | 'updated' | 'exists' } {
   const dir = dirname(configPath);

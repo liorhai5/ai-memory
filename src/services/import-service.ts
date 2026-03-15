@@ -1,10 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { basename } from 'node:path';
 import type { IdeType, TurnRole } from '../types.js';
 import { ConversationStore } from '../stores/conversation-store.js';
 import { stripPromptWrappers } from '../utils/strip.js';
-import { deriveProjectKey, normalizeWorkspaceLabel } from '../utils/workspace-identity.js';
-import { basename } from 'node:path';
+import { resolveWorkspace } from '../utils/workspace-identity.js';
 
 export interface ImportReport {
   created: number;
@@ -33,6 +33,35 @@ function toIso(ts: unknown): string {
   return new Date().toISOString();
 }
 
+/** Extract the IDE project token from a source path. */
+function extractToken(filePath: string): string | null {
+  for (const marker of ['/.claude/projects/', '/.cursor/projects/']) {
+    const idx = filePath.indexOf(marker);
+    if (idx >= 0) {
+      const rest = filePath.substring(idx + marker.length);
+      const token = rest.split('/')[0];
+      return token || null;
+    }
+  }
+  return null;
+}
+
+/** Recursively collect all .jsonl files under a directory. */
+function collectJsonlFiles(dir: string): string[] {
+  const results: string[] = [];
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        results.push(...collectJsonlFiles(full));
+      } else if (entry.name.endsWith('.jsonl')) {
+        results.push(full);
+      }
+    }
+  } catch { /* skip inaccessible dirs */ }
+  return results;
+}
+
 export class ImportService {
   constructor(private readonly conversationStore: ConversationStore) {}
 
@@ -56,21 +85,17 @@ export class ImportService {
   importFile(filePath: string, forceSummary = false): ImportReport {
     const report: ImportReport = { created: 0, updated: 0, skipped: 0, errors: 0 };
     if (filePath.includes('/.claude/projects/')) {
-      // Extract externalId from filename, workspace from parent dir
-      const parts = filePath.split('/');
-      const fileName = parts[parts.length - 1];
+      const fileName = filePath.split('/').pop()!;
       if (!fileName.endsWith('.jsonl')) { report.skipped += 1; return report; }
       const externalId = fileName.replace(/\.jsonl$/, '');
-      const projectDir = parts[parts.length - 2];
-      const workspace = projectDir.replace(/^-/, '');
-      this.importSingleFile({ ide: 'claude-code', filePath, externalId, workspace, report, forceSummary });
+      const token = extractToken(filePath);
+      this.importSingleFile({ ide: 'claude-code', filePath, externalId, token, report, forceSummary });
     } else if (filePath.includes('/.cursor/projects/')) {
-      const parts = filePath.split('/');
-      const fileName = parts[parts.length - 1];
+      const fileName = filePath.split('/').pop()!;
       if (!fileName.endsWith('.jsonl')) { report.skipped += 1; return report; }
-      const convDir = fileName.replace(/\.jsonl$/, '');
-      const projectDir = parts[parts.length - 4];
-      this.importSingleFile({ ide: 'cursor', filePath, externalId: convDir, workspace: projectDir, report, forceSummary });
+      const externalId = fileName.replace(/\.jsonl$/, '');
+      const token = extractToken(filePath);
+      this.importSingleFile({ ide: 'cursor', filePath, externalId, token, report, forceSummary });
     } else if (filePath.includes('/.codex/sessions/')) {
       this.importCodexFile(filePath, report, forceSummary);
     } else {
@@ -79,6 +104,7 @@ export class ImportService {
     return report;
   }
 
+  // D045: Recursive traversal to pick up subagent .jsonl files
   private importClaude(report: ImportReport, forceSummary: boolean): void {
     const base = `${homedir()}/.claude/projects`;
     if (!existsSync(base)) return;
@@ -86,13 +112,15 @@ export class ImportService {
     for (const project of projectDirs) {
       const dir = `${base}/${project}`;
       if (!existsSync(dir)) continue;
-      const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
-      for (const file of files) {
+      const jsonlFiles = collectJsonlFiles(dir);
+      for (const filePath of jsonlFiles) {
+        const fileName = filePath.split('/').pop()!;
+        const externalId = fileName.replace(/\.jsonl$/, '');
         this.importSingleFile({
           ide: 'claude-code',
-          filePath: `${dir}/${file}`,
-          externalId: file.replace(/\.jsonl$/, ''),
-          workspace: project.replace(/^-/, ''),
+          filePath,
+          externalId,
+          token: project,
           report,
           forceSummary
         });
@@ -115,7 +143,7 @@ export class ImportService {
           ide: 'cursor',
           filePath: path,
           externalId: convDir,
-          workspace: project,
+          token: project,
           report,
           forceSummary
         });
@@ -160,12 +188,11 @@ export class ImportService {
       const messages = this.parseCodexMessages(lines);
       if (messages.length === 0) { report.skipped += 1; return; }
 
-      const workspaceLabel = normalizeWorkspaceLabel(workspace);
       const existing = this.conversationStore.byExternalId(externalId);
       const conversation = this.conversationStore.upsertConversationByExternalId({
         external_id: externalId,
-        workspace: workspaceLabel,
-        project_key: deriveProjectKey({ workspace: workspaceLabel, sourcePath: workspacePath ?? filePath }),
+        workspace,
+        workspace_path: workspacePath,
         ide: 'codex',
         source_path: filePath,
         source_mtime: stat.mtime.toISOString(),
@@ -236,11 +263,12 @@ export class ImportService {
     return messages;
   }
 
+  // D045: importSingleFile now uses resolveWorkspace() with token + transcript lines
   private importSingleFile(input: {
     ide: IdeType;
     filePath: string;
     externalId: string;
-    workspace: string;
+    token: string | null;
     report: ImportReport;
     forceSummary: boolean;
   }): void {
@@ -253,15 +281,12 @@ export class ImportService {
         return;
       }
 
+      const { workspace, workspace_path } = resolveWorkspace(input.ide, input.token, lines);
       const existing = this.conversationStore.byExternalId(input.externalId);
-      const workspaceLabel = normalizeWorkspaceLabel(input.workspace);
       const conversation = this.conversationStore.upsertConversationByExternalId({
         external_id: input.externalId,
-        workspace: workspaceLabel,
-        project_key: deriveProjectKey({
-          workspace: workspaceLabel,
-          sourcePath: input.filePath
-        }),
+        workspace,
+        workspace_path,
         ide: input.ide,
         source_path: input.filePath,
         source_mtime: stat.mtime.toISOString(),
