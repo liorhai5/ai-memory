@@ -177,27 +177,19 @@ describe('dashboard RPC adapter', () => {
     expect(result.integrations.claude_code.hooks).toBeUndefined();
   });
 
-  test('getDashboardStatus Claude MCP readiness is true when both registry and settings are configured', () => {
+  test('getDashboardStatus Claude MCP readiness is true when registry is configured', () => {
     const { app, dir } = createTempApp();
     const prevHome = process.env.HOME;
     process.env.HOME = dir;
     try {
-      const claudeDir = join(dir, '.claude');
-      mkdirSync(claudeDir, { recursive: true });
-      writeFileSync(
-        join(claudeDir, 'settings.json'),
-        JSON.stringify({ mcpServers: { 'ai-memory': { command: 'ai-memory', args: ['mcp'] } } }, null, 2)
-      );
       writeFileSync(
         join(dir, '.claude.json'),
         JSON.stringify({ mcpServers: { 'ai-memory': { command: 'ai-memory', args: ['mcp'] } } }, null, 2)
       );
 
-      const result = expectOk<{ integrations: { claude_code: { settings_mcp_configured: boolean; registry_mcp_configured: boolean; mcp_configured: boolean } } }>(
+      const result = expectOk<{ integrations: { claude_code: { mcp_configured: boolean } } }>(
         handleRpc('getDashboardStatus', {}, app)
       );
-      expect(result.integrations.claude_code.settings_mcp_configured).toBe(true);
-      expect(result.integrations.claude_code.registry_mcp_configured).toBe(true);
       expect(result.integrations.claude_code.mcp_configured).toBe(true);
     } finally {
       if (typeof prevHome === 'undefined') delete process.env.HOME;

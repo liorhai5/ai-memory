@@ -4,11 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   registerCursorMcp,
-  registerClaudeCodeMcp,
   registerCodexMcp,
   writeSkills,
   SKILL_DEFINITIONS
-} from '../../src/hooks/init-config.js';
+} from '../../src/mcp/init-config.js';
 
 function readJson(path: string): any {
   return JSON.parse(readFileSync(path, 'utf8'));
@@ -37,50 +36,6 @@ describe('registerCursorMcp', () => {
     expect(result.updated).toBe(false);
     const json = readJson(mcpPath);
     expect(json.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
-  });
-});
-
-describe('registerClaudeCodeMcp', () => {
-  test('creates settings.json with ai-memory MCP entry', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-claude-mcp-'));
-    const settingsPath = join(home, '.claude', 'settings.json');
-    const result = registerClaudeCodeMcp(settingsPath);
-
-    expect(result.updated).toBe(true);
-    const json = readJson(settingsPath);
-    expect(json.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
-  });
-
-  test('preserves existing settings fields', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-claude-mcp-preserve-'));
-    const dir = join(home, '.claude');
-    mkdirSync(dir, { recursive: true });
-    const settingsPath = join(dir, 'settings.json');
-    writeFileSync(settingsPath, JSON.stringify({ someOtherKey: true }, null, 2));
-
-    registerClaudeCodeMcp(settingsPath);
-
-    const json = readJson(settingsPath);
-    expect(json.someOtherKey).toBe(true);
-    expect(json.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
-  });
-
-  test('is idempotent — no duplicate entry on second call', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-claude-mcp-idempotent-'));
-    const settingsPath = join(home, '.claude', 'settings.json');
-    registerClaudeCodeMcp(settingsPath);
-    const result = registerClaudeCodeMcp(settingsPath);
-    expect(result.updated).toBe(false);
-  });
-
-  test('does not write hook entries', () => {
-    const home = mkdtempSync(join(tmpdir(), 'ai-memory-claude-mcp-no-hooks-'));
-    const settingsPath = join(home, '.claude', 'settings.json');
-    registerClaudeCodeMcp(settingsPath);
-
-    const json = readJson(settingsPath);
-    // Hooks section should NOT be written by registerClaudeCodeMcp
-    expect(json.hooks).toBeUndefined();
   });
 });
 

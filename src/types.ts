@@ -4,8 +4,8 @@ export type TurnRole = 'user' | 'assistant' | 'system';
 export interface Conversation {
   id: string;
   external_id: string;
-  project_key: string | null;
   workspace: string | null;
+  workspace_path: string | null;
   ide: IdeType | null;
   source_path: string | null;
   source_mtime: string | null;
