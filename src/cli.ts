@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from './app.js';
 import { getConfigValue, setConfigValue, loadConfig, saveConfig } from './services/config-service.js';
-import { registerCursorMcp, registerClaudeCodeMcp, registerCodexMcp, writeSkills } from './hooks/init-config.js';
+import { registerCursorMcp, registerCodexMcp, writeSkills } from './mcp/init-config.js';
 import { stripPromptWrappers } from './utils/strip.js';
 import type { IdeType } from './types.js';
 import { parseUsageRange } from './services/usage-service.js';
@@ -132,11 +132,8 @@ program
         registerCursorMcp(mcpPath);
         phases.push({ phase: 'mcp', path: mcpPath, status: 'created' });
       } else if (ide === 'claude-code') {
-        const settingsPath = join(home, '.claude/settings.json');
-        registerClaudeCodeMcp(settingsPath);
-        phases.push({ phase: 'mcp', path: settingsPath, status: 'created' });
         const runtimeMcp = syncClaudeRuntimeMcp(home);
-        phases.push({ phase: 'mcp-runtime', path: runtimeMcp.path, status: runtimeMcp.status });
+        phases.push({ phase: 'mcp', path: runtimeMcp.path, status: runtimeMcp.status });
       } else if (ide === 'codex') {
         const configPath = join(home, '.codex/config.toml');
         const codexResult = registerCodexMcp(configPath);

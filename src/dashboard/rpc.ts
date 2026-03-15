@@ -24,6 +24,8 @@ export function handleRpc(
         return { ok: true, result: searchConversations(ctx, params) };
       case 'listWorkspaces':
         return { ok: true, result: listWorkspaces(ctx) };
+      case 'listProjects':
+        return { ok: true, result: listProjects(ctx, params) };
       case 'listIdes':
         return { ok: true, result: listIdes(ctx) };
       case 'setSummary':
@@ -113,6 +115,39 @@ function listWorkspaces(ctx: AppContext) {
   return { workspaces: rows.map((r) => r.workspace) };
 }
 
+function listProjects(ctx: AppContext, params: Record<string, unknown>) {
+  const dateFrom = (params.date_from as string | undefined) ?? undefined;
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (dateFrom) {
+    where.push('updated_at >= ?');
+    args.push(dateFrom);
+  }
+  const clause = where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '';
+  const rows = ctx.db.prepare(`
+    SELECT
+      COALESCE(workspace, 'unknown') AS name,
+      workspace_path AS path,
+      GROUP_CONCAT(DISTINCT ide) AS ides,
+      COUNT(*) AS conversation_count,
+      SUM(turn_count) AS total_turns,
+      MAX(updated_at) AS last_activity,
+      MIN(started_at) AS first_seen
+    FROM conversations${clause}
+    GROUP BY COALESCE(workspace, 'unknown'), workspace_path
+    ORDER BY last_activity DESC
+  `).all(...args) as Array<{
+    name: string;
+    path: string | null;
+    ides: string;
+    conversation_count: number;
+    total_turns: number;
+    last_activity: string;
+    first_seen: string;
+  }>;
+  return { projects: rows };
+}
+
 function listIdes(ctx: AppContext) {
   const rows = ctx.db
     .prepare(`SELECT DISTINCT ide FROM conversations WHERE ide IS NOT NULL ORDER BY ide`)
@@ -180,12 +215,10 @@ function buildWatcherStatus(ctx: AppContext) {
 function buildIntegrationStatus(ctx: AppContext) {
   const home = homedir();
   const cursorMcpPath = join(home, '.cursor', 'mcp.json');
-  const claudeSettingsPath = join(home, '.claude', 'settings.json');
   const claudeRegistryPath = join(home, '.claude.json');
   const codexConfigPath = join(home, '.codex', 'config.toml');
 
   const cursorMcp = safeJson(cursorMcpPath);
-  const claudeSettings = safeJson(claudeSettingsPath);
   const claudeRegistry = safeJson(claudeRegistryPath);
   const codexConfig = readRawFile(codexConfigPath);
 
@@ -197,14 +230,9 @@ function buildIntegrationStatus(ctx: AppContext) {
       mcp_parse_error: cursorMcp.error,
     },
     claude_code: {
-      settings_file: claudeSettingsPath,
-      settings_exists: claudeSettings.exists,
-      settings_mcp_configured: Boolean(claudeSettings.json?.mcpServers?.['ai-memory']),
       registry_file: claudeRegistryPath,
       registry_exists: claudeRegistry.exists,
-      registry_mcp_configured: Boolean(claudeRegistry.json?.mcpServers?.['ai-memory']),
-      mcp_configured: Boolean(claudeSettings.json?.mcpServers?.['ai-memory']) && Boolean(claudeRegistry.json?.mcpServers?.['ai-memory']),
-      settings_parse_error: claudeSettings.error,
+      mcp_configured: Boolean(claudeRegistry.json?.mcpServers?.['ai-memory']),
       registry_parse_error: claudeRegistry.error,
     },
     codex: {

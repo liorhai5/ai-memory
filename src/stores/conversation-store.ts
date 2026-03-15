@@ -3,7 +3,7 @@ import type { Conversation, IdeType, Turn, TurnRole } from '../types.js';
 import { hashContent } from '../utils/hash.js';
 import { newId } from '../utils/id.js';
 import { nowIso } from '../utils/time.js';
-import { normalizeWorkspaceLabel, toProjectKey } from '../utils/workspace-identity.js';
+import { normalizeWorkspaceLabel } from '../utils/workspace-identity.js';
 
 export class ConversationStore {
   constructor(
@@ -14,29 +14,29 @@ export class ConversationStore {
   upsertConversationByExternalId(input: {
     external_id: string;
     workspace: string | null;
-    project_key?: string | null;
+    workspace_path?: string | null;
     ide: IdeType | null;
     source_path?: string | null;
     source_mtime?: string | null;
     started_at?: string;
   }): Conversation {
     const workspace = normalizeWorkspaceLabel(input.workspace);
-    const projectKey = input.project_key ?? toProjectKey(workspace);
+    const workspacePath = input.workspace_path ?? null;
     const existing = this.byExternalId(input.external_id);
     if (existing) {
       this.db
         .prepare(
           `
           UPDATE conversations
-          SET project_key = COALESCE(?, project_key),
-              workspace = COALESCE(?, workspace),
+          SET workspace = COALESCE(?, workspace),
+              workspace_path = COALESCE(?, workspace_path),
               ide = COALESCE(?, ide),
               source_path = COALESCE(?, source_path),
               source_mtime = COALESCE(?, source_mtime)
           WHERE id = ?
           `
         )
-        .run(projectKey, workspace, input.ide, input.source_path ?? null, input.source_mtime ?? null, existing.id);
+        .run(workspace, workspacePath, input.ide, input.source_path ?? null, input.source_mtime ?? null, existing.id);
       return this.byId(existing.id)!;
     }
 
@@ -44,8 +44,8 @@ export class ConversationStore {
     const row: Conversation = {
       id: newId(),
       external_id: input.external_id,
-      project_key: projectKey,
       workspace,
+      workspace_path: workspacePath,
       ide: input.ide,
       source_path: input.source_path ?? null,
       source_mtime: input.source_mtime ?? null,
@@ -59,7 +59,7 @@ export class ConversationStore {
       .prepare(
         `
         INSERT INTO conversations (
-          id, external_id, project_key, workspace, ide, source_path, source_mtime,
+          id, external_id, workspace, workspace_path, ide, source_path, source_mtime,
           title, summary, turn_count, started_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
@@ -67,8 +67,8 @@ export class ConversationStore {
       .run(
         row.id,
         row.external_id,
-        row.project_key,
         row.workspace,
+        row.workspace_path,
         row.ide,
         row.source_path,
         row.source_mtime,
@@ -117,35 +117,6 @@ export class ConversationStore {
         `SELECT * FROM conversations WHERE workspace IS NOT ? ORDER BY updated_at DESC LIMIT ?`
       )
       .all(normalizedWorkspace, input.limit - same.length) as Conversation[];
-    return [...same, ...rest];
-  }
-
-  listRecentByProjectKey(input: {
-    project_key: string | null;
-    workspace: string | null;
-    limit: number;
-    include_other?: boolean;
-  }): Conversation[] {
-    const includeOther = input.include_other ?? true;
-    if (!input.project_key) {
-      return this.listRecentByWorkspace({
-        workspace: input.workspace,
-        limit: input.limit,
-        include_other: includeOther
-      });
-    }
-    if (!includeOther) {
-      return this.db
-        .prepare(`SELECT * FROM conversations WHERE project_key = ? ORDER BY updated_at DESC LIMIT ?`)
-        .all(input.project_key, input.limit) as Conversation[];
-    }
-    const same = this.db
-      .prepare(`SELECT * FROM conversations WHERE project_key = ? ORDER BY updated_at DESC LIMIT ?`)
-      .all(input.project_key, input.limit) as Conversation[];
-    if (same.length >= input.limit) return same;
-    const rest = this.db
-      .prepare(`SELECT * FROM conversations WHERE project_key IS NOT ? ORDER BY updated_at DESC LIMIT ?`)
-      .all(input.project_key, input.limit - same.length) as Conversation[];
     return [...same, ...rest];
   }
 

@@ -156,7 +156,7 @@ describe('CLI commands', () => {
     expect(result.status).not.toBe(0);
   });
 
-  test('init --ide claude-code syncs runtime MCP registry in ~/.claude.json', () => {
+  test('init --ide claude-code registers MCP in ~/.claude.json', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-claude-registry-'));
     const dbPath = join(dir, '.ai-memory/services/memory.db');
     const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
@@ -164,28 +164,21 @@ describe('CLI commands', () => {
     const init = runCli(['init', '--ide', 'claude-code', '--json'], env);
     expect(init.status).toBe(0);
 
-    const settingsPath = join(dir, '.claude', 'settings.json');
     const registryPath = join(dir, '.claude.json');
-    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
     const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
 
-    expect(settings.mcpServers?.['ai-memory']).toEqual({ command: 'ai-memory', args: ['mcp'] });
     expect(registry.mcpServers?.['ai-memory']?.command).toBe('ai-memory');
     expect(registry.mcpServers?.['ai-memory']?.args).toEqual(['mcp']);
-
-    // No hooks section written (D044)
-    expect(settings.hooks).toBeUndefined();
   });
 
-  test('init --ide claude-code does not write hooks to settings.json', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-no-hooks-'));
+  test('init --ide claude-code does not write settings.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-cli-no-settings-'));
     const dbPath = join(dir, '.ai-memory/services/memory.db');
     const env = { AI_MEMORY_DB_PATH: dbPath, HOME: dir };
 
     runCli(['init', '--ide', 'claude-code', '--json'], env);
 
-    const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.json'), 'utf8'));
-    expect(settings.hooks).toBeUndefined();
+    expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(false);
   });
 
   test('init --ide cursor does not write hooks.json', () => {

@@ -29,14 +29,9 @@ interface StatusPayload {
       mcp_parse_error: string | null;
     };
     claude_code: {
-      settings_file: string;
-      settings_exists: boolean;
-      settings_mcp_configured: boolean;
       registry_file: string;
       registry_exists: boolean;
-      registry_mcp_configured: boolean;
       mcp_configured: boolean;
-      settings_parse_error: string | null;
       registry_parse_error: string | null;
     };
     codex: {
@@ -256,13 +251,9 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
               </div>
               <div className="status-card">
                 <div className="status-card-k">Claude Code</div>
-                <div className="status-list-row"><span>Settings exists</span><BoolBadge ok={data.integrations.claude_code.settings_exists} /></div>
-                <div className="status-list-row"><span>Settings MCP</span><BoolBadge ok={data.integrations.claude_code.settings_mcp_configured} /></div>
-                <div className="status-list-row"><span>Registry MCP</span><BoolBadge ok={data.integrations.claude_code.registry_mcp_configured} /></div>
-                <div className="status-list-row"><span>MCP ready</span><BoolBadge ok={data.integrations.claude_code.mcp_configured} /></div>
-                <div className="status-mono status-path">{data.integrations.claude_code.settings_file}</div>
-                {data.integrations.claude_code.registry_file && <div className="status-mono status-path">{data.integrations.claude_code.registry_file}</div>}
-                {data.integrations.claude_code.settings_parse_error && <div className="status-warn">{data.integrations.claude_code.settings_parse_error}</div>}
+                <div className="status-list-row"><span>Registry exists</span><BoolBadge ok={data.integrations.claude_code.registry_exists} /></div>
+                <div className="status-list-row"><span>MCP configured</span><BoolBadge ok={data.integrations.claude_code.mcp_configured} /></div>
+                <div className="status-mono status-path">{data.integrations.claude_code.registry_file}</div>
                 {data.integrations.claude_code.registry_parse_error && <div className="status-warn">{data.integrations.claude_code.registry_parse_error}</div>}
               </div>
               <div className="status-card">
