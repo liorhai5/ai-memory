@@ -1,6 +1,6 @@
 # ai-memory
 
-![License](https://img.shields.io/badge/license-ISC-blue) ![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
+![License](https://img.shields.io/badge/license-ISC-blue) ![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen) ![SQLite](https://img.shields.io/badge/SQLite-%3E%3D3.35-blue)
 
 **Conversation log and retrieval for AI coding assistants.**
 
@@ -13,6 +13,7 @@ ai-memory logs every conversation and makes it searchable. It watches IDE transc
 ## Prerequisites
 
 - Node.js >= 22
+- SQLite >= 3.35 (bundled by `better-sqlite3`; required for `ALTER TABLE DROP COLUMN`)
 
 ## Install
 
@@ -246,7 +247,7 @@ ai-memory does not create project-local marker files.
 
 Five tables + one FTS index:
 
-- `conversations` — id, external_id, project_key, workspace, ide, source_path, source_mtime, title, summary, turn_count, started_at, updated_at
+- `conversations` — id, external_id, workspace, workspace_path, ide, source_path, source_mtime, title, summary, turn_count, started_at, updated_at
 - `turns` — id, conversation_id, role (`user|assistant|system`), content, content_hash, turn_number, created_at
 - `turns_fts` — FTS5 virtual table on turn content (BM25 search)
 - `tool_usage` — MCP and import telemetry (latency, result counts, success/error type) used by `ai-memory usage`
