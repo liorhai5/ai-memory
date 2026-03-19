@@ -54,6 +54,7 @@ function listConversations(ctx: AppContext, params: Record<string, unknown>) {
   const limit = Number(params.limit ?? 50);
   const offset = Number(params.offset ?? 0);
   const workspace = (params.workspace as string | undefined) ?? undefined;
+  const projectSlug = (params.project_slug as string | undefined) ?? undefined;
   const dateFrom = (params.date_from as string | undefined) ?? undefined;
   const ide = (params.ide as string | undefined) ?? undefined;
 
@@ -63,6 +64,10 @@ function listConversations(ctx: AppContext, params: Record<string, unknown>) {
     const normalizedWorkspace = normalizeWorkspaceLabel(workspace);
     where.push('workspace IS ?');
     args.push(normalizedWorkspace);
+  }
+  if (typeof projectSlug !== 'undefined') {
+    where.push('project_slug IS ?');
+    args.push(projectSlug);
   }
   if (dateFrom) {
     where.push('updated_at >= ?');
@@ -97,9 +102,11 @@ function getConversation(ctx: AppContext, params: Record<string, unknown>) {
 function searchConversations(ctx: AppContext, params: Record<string, unknown>) {
   const query = String(params.query ?? '');
   const workspace = (params.workspace as string | undefined) ?? undefined;
+  const projectSlug = (params.project_slug as string | undefined) ?? undefined;
   return ctx.searchService.search({
     query,
     workspace,
+    project_slug: projectSlug,
     date_from: params.date_from as string | undefined,
     date_to: params.date_to as string | undefined,
     role: params.role as 'user' | 'assistant' | undefined,
@@ -124,21 +131,24 @@ function listProjects(ctx: AppContext, params: Record<string, unknown>) {
     args.push(dateFrom);
   }
   const clause = where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '';
+  // D047: Group by project_slug when present, otherwise by workspace + workspace_path
   const rows = ctx.db.prepare(`
     SELECT
-      COALESCE(workspace, 'unknown') AS name,
-      workspace_path AS path,
+      COALESCE(project_slug, COALESCE(workspace, 'unknown')) AS name,
+      CASE WHEN project_slug IS NOT NULL THEN NULL ELSE workspace_path END AS path,
+      project_slug,
       GROUP_CONCAT(DISTINCT ide) AS ides,
       COUNT(*) AS conversation_count,
       SUM(turn_count) AS total_turns,
       MAX(updated_at) AS last_activity,
       MIN(started_at) AS first_seen
     FROM conversations${clause}
-    GROUP BY COALESCE(workspace, 'unknown'), workspace_path
+    GROUP BY COALESCE(project_slug, COALESCE(workspace, 'unknown') || ':' || COALESCE(workspace_path, ''))
     ORDER BY last_activity DESC
   `).all(...args) as Array<{
     name: string;
     path: string | null;
+    project_slug: string | null;
     ides: string;
     conversation_count: number;
     total_turns: number;

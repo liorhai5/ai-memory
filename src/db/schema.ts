@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   external_id TEXT UNIQUE,
   workspace TEXT,
   workspace_path TEXT,
+  project_slug TEXT,
   ide TEXT,                     -- cursor|claude-code|cli
   source_path TEXT,
   source_mtime TEXT,

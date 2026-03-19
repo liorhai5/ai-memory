@@ -169,6 +169,52 @@ program
     process.exit(0);
   });
 
+// D047: Per-project configuration
+const projectCmd = program.command('project').description('Per-project configuration');
+projectCmd
+  .command('init')
+  .description('Initialize per-project .ai-memory/config.json in current directory')
+  .option('--slug <slug>', 'Project slug for grouping (default: derived from directory name)')
+  .option('--skip', 'Skip this project during import')
+  .option('--json')
+  .action((opts) => {
+    const cwd = process.cwd();
+    const configDir = join(cwd, '.ai-memory');
+    const configFile = join(configDir, 'config.json');
+
+    if (existsSync(configFile)) {
+      if (opts.json) {
+        out({ ok: false, error: 'Config already exists', path: configFile }, true);
+      } else {
+        console.error(`Config already exists: ${configFile}`);
+        console.error(`Edit directly: ${configFile}`);
+      }
+      process.exit(1);
+    }
+
+    const dirName = cwd.split('/').pop() || 'unknown';
+    const config: Record<string, unknown> = {
+      project_slug: opts.slug || dirName,
+      skip: !!opts.skip
+    };
+
+    if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
+    writeFileSync(configFile, JSON.stringify(config, null, 2) + '\n');
+
+    if (opts.json) {
+      out({ ok: true, path: configFile, config }, true);
+    } else {
+      console.log(`Created ${configFile}`);
+      console.log(`  project_slug: ${config.project_slug}${!opts.slug ? '  (derived from directory name)' : ''}`);
+      console.log(`  skip: ${config.skip}`);
+      console.log('');
+      console.log('Edit the file to customize. Available fields:');
+      console.log('  project_slug  — stable grouping label (survives directory moves)');
+      console.log('  skip          — set to true to exclude from memory import');
+    }
+    process.exit(0);
+  });
+
 const configCmd = program.command('config').description('Get or set configuration values');
 configCmd
   .command('get')

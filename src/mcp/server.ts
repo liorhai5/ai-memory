@@ -97,6 +97,7 @@ export function createToolHandlers(dbPath?: string) {
     },
     async ['ai-memory-conversations'](input: {
       workspace?: string | null;
+      project_slug?: string | null;
       date_from?: string;
       date_to?: string;
       limit?: number;
@@ -105,6 +106,7 @@ export function createToolHandlers(dbPath?: string) {
       return {
         conversations: app.conversationStore.listConversations({
           workspace: input.workspace,
+          project_slug: input.project_slug,
           date_from: input.date_from,
           date_to: input.date_to,
           limit: input.limit,
