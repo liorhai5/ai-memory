@@ -6,6 +6,7 @@ export interface Conversation {
   external_id: string;
   workspace: string | null;
   workspace_path: string | null;
+  project_slug: string | null;
   ide: IdeType | null;
   source_path: string | null;
   source_mtime: string | null;
@@ -29,6 +30,7 @@ export interface Turn {
 export interface SearchParams {
   query?: string;
   workspace?: string | null;
+  project_slug?: string | null;
   date_from?: string;
   date_to?: string;
   role?: 'user' | 'assistant';

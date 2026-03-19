@@ -36,6 +36,10 @@ export class SearchService {
         where.push('c.workspace IS ?');
         params.push(normalizedWorkspace);
       }
+      if (typeof input.project_slug !== 'undefined') {
+        where.push('c.project_slug IS ?');
+        params.push(input.project_slug);
+      }
       if (input.date_from) {
         where.push('c.updated_at >= ?');
         params.push(input.date_from);
@@ -102,6 +106,10 @@ export class SearchService {
         const normalizedWorkspace = normalizeWorkspaceLabel(input.workspace);
         where.push('workspace IS ?');
         params.push(normalizedWorkspace);
+      }
+      if (typeof input.project_slug !== 'undefined') {
+        where.push('project_slug IS ?');
+        params.push(input.project_slug);
       }
       if (input.date_from) {
         where.push('updated_at >= ?');
