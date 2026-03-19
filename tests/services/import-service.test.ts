@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../../src/app.js';
@@ -290,6 +290,170 @@ describe('ImportService — Codex JSONL parser', () => {
       process.env.HOME = dir;
       const report = app.importService.importTranscripts('all');
       expect(report.created).toBe(1);
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+});
+
+// D047: Per-project configuration tests
+describe('ImportService — project config (D047)', () => {
+  function writeProjectConfig(projectDir: string, config: Record<string, unknown>) {
+    const configDir = join(projectDir, '.ai-memory');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify(config));
+  }
+
+  function writeCodexTranscript(homeDir: string, date: string, filename: string, lines: object[]) {
+    const [year, month, day] = date.split('-');
+    const sessionDir = join(homeDir, '.codex', 'sessions', year, month, day);
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, filename), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  }
+
+  test('skip: true prevents Claude Code transcript import', () => {
+    const { app, dir } = setupImportTest();
+    // Create a project directory that the transcript cwd will point to
+    const projectDir = join(dir, 'my-project');
+    mkdirSync(projectDir, { recursive: true });
+    writeProjectConfig(projectDir, { skip: true });
+
+    // Write a Claude Code transcript with cwd pointing to the project
+    const claudeDir = join(dir, '.claude/projects/my-project');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(join(claudeDir, 'session-skip.jsonl'), [
+      JSON.stringify({ type: 'user', cwd: projectDir, message: { content: 'hello' }, timestamp: '2026-03-19T10:00:00Z' }),
+      JSON.stringify({ type: 'assistant', message: { content: 'hi' }, timestamp: '2026-03-19T10:01:00Z' })
+    ].join('\n'));
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      const report = app.importService.importTranscripts('claude-code');
+      expect(report.skipped).toBeGreaterThan(0);
+      expect(report.created).toBe(0);
+      expect(app.conversationStore.byExternalId('session-skip')).toBeNull();
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  test('project_slug is stored on conversation during import', () => {
+    const { app, dir } = setupImportTest();
+    const projectDir = join(dir, 'my-project');
+    mkdirSync(projectDir, { recursive: true });
+    writeProjectConfig(projectDir, { project_slug: 'my-platform' });
+
+    const claudeDir = join(dir, '.claude/projects/my-project');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(join(claudeDir, 'session-slug.jsonl'), [
+      JSON.stringify({ type: 'user', cwd: projectDir, message: { content: 'hello' }, timestamp: '2026-03-19T10:00:00Z' }),
+      JSON.stringify({ type: 'assistant', message: { content: 'hi' }, timestamp: '2026-03-19T10:01:00Z' })
+    ].join('\n'));
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      const report = app.importService.importTranscripts('claude-code');
+      expect(report.created).toBe(1);
+      const conv = app.conversationStore.byExternalId('session-slug');
+      expect(conv).not.toBeNull();
+      expect(conv!.project_slug).toBe('my-platform');
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  test('no config file means normal import (no slug, not skipped)', () => {
+    const { app, dir } = setupImportTest();
+    const projectDir = join(dir, 'my-project');
+    mkdirSync(projectDir, { recursive: true });
+    // No .ai-memory/config.json
+
+    const claudeDir = join(dir, '.claude/projects/my-project');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(join(claudeDir, 'session-noconfig.jsonl'), [
+      JSON.stringify({ type: 'user', cwd: projectDir, message: { content: 'hello' }, timestamp: '2026-03-19T10:00:00Z' }),
+      JSON.stringify({ type: 'assistant', message: { content: 'hi' }, timestamp: '2026-03-19T10:01:00Z' })
+    ].join('\n'));
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      const report = app.importService.importTranscripts('claude-code');
+      expect(report.created).toBe(1);
+      const conv = app.conversationStore.byExternalId('session-noconfig');
+      expect(conv!.project_slug).toBeNull();
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  test('skip: true prevents Codex transcript import', () => {
+    const { app, dir } = setupImportTest();
+    const projectDir = join(dir, 'codex-proj');
+    mkdirSync(projectDir, { recursive: true });
+    writeProjectConfig(projectDir, { skip: true });
+
+    const threadId = 'codex-skip-1';
+    writeCodexTranscript(dir, '2026-03-19', `rollout-${threadId}.jsonl`, [
+      { timestamp: '2026-03-19T10:00:00Z', type: 'session_meta', payload: { id: threadId, cwd: projectDir } },
+      { timestamp: '2026-03-19T10:01:00Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'test' }] } },
+    ]);
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      const report = app.importService.importTranscripts('codex');
+      expect(report.skipped).toBeGreaterThan(0);
+      expect(report.created).toBe(0);
+      expect(app.conversationStore.byExternalId(threadId)).toBeNull();
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  test('project_slug stored on Codex conversation', () => {
+    const { app, dir } = setupImportTest();
+    const projectDir = join(dir, 'codex-proj');
+    mkdirSync(projectDir, { recursive: true });
+    writeProjectConfig(projectDir, { project_slug: 'codex-platform' });
+
+    const threadId = 'codex-slug-1';
+    writeCodexTranscript(dir, '2026-03-19', `rollout-${threadId}.jsonl`, [
+      { timestamp: '2026-03-19T10:00:00Z', type: 'session_meta', payload: { id: threadId, cwd: projectDir } },
+      { timestamp: '2026-03-19T10:01:00Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'test' }] } },
+    ]);
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      const report = app.importService.importTranscripts('codex');
+      expect(report.created).toBe(1);
+      const conv = app.conversationStore.byExternalId(threadId);
+      expect(conv!.project_slug).toBe('codex-platform');
+    } finally {
+      process.env.HOME = origHome;
+    }
+  });
+
+  test('system never auto-creates .ai-memory folder', () => {
+    const { app, dir } = setupImportTest();
+    const projectDir = join(dir, 'clean-project');
+    mkdirSync(projectDir, { recursive: true });
+
+    const claudeDir = join(dir, '.claude/projects/clean-project');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(join(claudeDir, 'session-clean.jsonl'), [
+      JSON.stringify({ type: 'user', cwd: projectDir, message: { content: 'hello' }, timestamp: '2026-03-19T10:00:00Z' }),
+      JSON.stringify({ type: 'assistant', message: { content: 'hi' }, timestamp: '2026-03-19T10:01:00Z' })
+    ].join('\n'));
+
+    const origHome = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      app.importService.importTranscripts('claude-code');
+      expect(existsSync(join(projectDir, '.ai-memory'))).toBe(false);
     } finally {
       process.env.HOME = origHome;
     }

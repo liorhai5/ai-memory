@@ -194,3 +194,54 @@ describe('CLI commands', () => {
     expect(existsSync(join(dir, '.cursor', 'mcp.json'))).toBe(true);
   });
 });
+
+// D047: project init CLI tests
+describe('CLI project init (D047)', () => {
+  function runCliInCwd(args: string[], env: Record<string, string>, cwd: string) {
+    return spawnSync('npx', ['tsx', join(process.cwd(), 'src/cli.ts'), ...args], {
+      cwd,
+      env: { ...process.env, ...env },
+      encoding: 'utf8'
+    });
+  }
+
+  test('project init creates .ai-memory/config.json with slug derived from dirname', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-proj-init-'));
+    const result = runCliInCwd(['project', 'init', '--json'], {}, dir);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.ok).toBe(true);
+    // slug derived from directory name
+    expect(typeof parsed.config.project_slug).toBe('string');
+    expect(parsed.config.project_slug.length).toBeGreaterThan(0);
+    expect(parsed.config.skip).toBe(false);
+
+    const configPath = join(dir, '.ai-memory', 'config.json');
+    expect(existsSync(configPath)).toBe(true);
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    expect(config.skip).toBe(false);
+  });
+
+  test('project init --slug --skip creates config with explicit values', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-proj-init-flags-'));
+    const result = runCliInCwd(['project', 'init', '--slug', 'my-platform', '--skip', '--json'], {}, dir);
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.config).toEqual({ project_slug: 'my-platform', skip: true });
+
+    const config = JSON.parse(readFileSync(join(dir, '.ai-memory', 'config.json'), 'utf8'));
+    expect(config.project_slug).toBe('my-platform');
+    expect(config.skip).toBe(true);
+  });
+
+  test('project init fails if config already exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-memory-proj-init-exists-'));
+    mkdirSync(join(dir, '.ai-memory'), { recursive: true });
+    writeFileSync(join(dir, '.ai-memory', 'config.json'), '{}');
+
+    const result = runCliInCwd(['project', 'init', '--json'], {}, dir);
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.ok).toBe(false);
+  });
+});

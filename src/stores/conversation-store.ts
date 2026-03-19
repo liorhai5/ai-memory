@@ -15,6 +15,7 @@ export class ConversationStore {
     external_id: string;
     workspace: string | null;
     workspace_path?: string | null;
+    project_slug?: string | null;
     ide: IdeType | null;
     source_path?: string | null;
     source_mtime?: string | null;
@@ -22,6 +23,7 @@ export class ConversationStore {
   }): Conversation {
     const workspace = normalizeWorkspaceLabel(input.workspace);
     const workspacePath = input.workspace_path ?? null;
+    const projectSlug = input.project_slug ?? null;
     const existing = this.byExternalId(input.external_id);
     if (existing) {
       this.db
@@ -30,13 +32,14 @@ export class ConversationStore {
           UPDATE conversations
           SET workspace = COALESCE(?, workspace),
               workspace_path = COALESCE(?, workspace_path),
+              project_slug = COALESCE(?, project_slug),
               ide = COALESCE(?, ide),
               source_path = COALESCE(?, source_path),
               source_mtime = COALESCE(?, source_mtime)
           WHERE id = ?
           `
         )
-        .run(workspace, workspacePath, input.ide, input.source_path ?? null, input.source_mtime ?? null, existing.id);
+        .run(workspace, workspacePath, projectSlug, input.ide, input.source_path ?? null, input.source_mtime ?? null, existing.id);
       return this.byId(existing.id)!;
     }
 
@@ -46,6 +49,7 @@ export class ConversationStore {
       external_id: input.external_id,
       workspace,
       workspace_path: workspacePath,
+      project_slug: projectSlug,
       ide: input.ide,
       source_path: input.source_path ?? null,
       source_mtime: input.source_mtime ?? null,
@@ -59,9 +63,9 @@ export class ConversationStore {
       .prepare(
         `
         INSERT INTO conversations (
-          id, external_id, workspace, workspace_path, ide, source_path, source_mtime,
+          id, external_id, workspace, workspace_path, project_slug, ide, source_path, source_mtime,
           title, summary, turn_count, started_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
       )
       .run(
@@ -69,6 +73,7 @@ export class ConversationStore {
         row.external_id,
         row.workspace,
         row.workspace_path,
+        row.project_slug,
         row.ide,
         row.source_path,
         row.source_mtime,
@@ -226,6 +231,7 @@ export class ConversationStore {
 
   listConversations(input: {
     workspace?: string | null;
+    project_slug?: string | null;
     date_from?: string;
     date_to?: string;
     limit?: number;
@@ -239,6 +245,10 @@ export class ConversationStore {
       const normalizedWorkspace = normalizeWorkspaceLabel(input.workspace);
       where.push('workspace IS ?');
       params.push(normalizedWorkspace);
+    }
+    if (typeof input.project_slug !== 'undefined') {
+      where.push('project_slug IS ?');
+      params.push(input.project_slug);
     }
     if (input.date_from) {
       where.push('updated_at >= ?');
