@@ -21,6 +21,13 @@ export function createDb(dbPath = getDbPath()): Database.Database {
     if (hasModel) {
       db.exec(`ALTER TABLE conversations DROP COLUMN model;`);
     }
+    // D047: Add project_slug column for per-project configuration
+    const hasProjectSlug = !!db
+      .prepare(`SELECT name FROM pragma_table_info('conversations') WHERE name = 'project_slug'`)
+      .get();
+    if (!hasProjectSlug) {
+      db.exec(`ALTER TABLE conversations ADD COLUMN project_slug TEXT;`);
+    }
   }
   // D044: WAL mode for concurrent reads during file-watch imports
   db.pragma('journal_mode = WAL');

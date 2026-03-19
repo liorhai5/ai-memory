@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import type { IdeType, TurnRole } from '../types.js';
 import { ConversationStore } from '../stores/conversation-store.js';
 import { stripPromptWrappers } from '../utils/strip.js';
+import { readProjectConfig } from '../utils/project-config.js';
 import { resolveWorkspace } from '../utils/workspace-identity.js';
 
 export interface ImportReport {
@@ -188,11 +189,19 @@ export class ImportService {
       const messages = this.parseCodexMessages(lines);
       if (messages.length === 0) { report.skipped += 1; return; }
 
+      // D047: Check per-project config for skip/slug
+      const projectConfig = readProjectConfig(workspacePath);
+      if (projectConfig?.skip) {
+        report.skipped += 1;
+        return;
+      }
+
       const existing = this.conversationStore.byExternalId(externalId);
       const conversation = this.conversationStore.upsertConversationByExternalId({
         external_id: externalId,
         workspace,
         workspace_path: workspacePath,
+        project_slug: projectConfig?.project_slug ?? null,
         ide: 'codex',
         source_path: filePath,
         source_mtime: stat.mtime.toISOString(),
@@ -282,11 +291,20 @@ export class ImportService {
       }
 
       const { workspace, workspace_path } = resolveWorkspace(input.ide, input.token, lines);
+
+      // D047: Check per-project config for skip/slug
+      const projectConfig = readProjectConfig(workspace_path);
+      if (projectConfig?.skip) {
+        input.report.skipped += 1;
+        return;
+      }
+
       const existing = this.conversationStore.byExternalId(input.externalId);
       const conversation = this.conversationStore.upsertConversationByExternalId({
         external_id: input.externalId,
         workspace,
         workspace_path,
+        project_slug: projectConfig?.project_slug ?? null,
         ide: input.ide,
         source_path: input.filePath,
         source_mtime: stat.mtime.toISOString(),

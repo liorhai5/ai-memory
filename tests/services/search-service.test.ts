@@ -117,6 +117,54 @@ describe('SearchService', () => {
     expect(ids1.some((id) => ids2.includes(id))).toBe(false);
   });
 
+  // D047: project_slug filter
+  test('project_slug filter restricts results', () => {
+    const { app } = createTempApp();
+    const c1 = app.conversationStore.upsertConversationByExternalId({
+      external_id: 'slug-1', workspace: 'ws', project_slug: 'platform', ide: 'cli'
+    });
+    const c2 = app.conversationStore.upsertConversationByExternalId({
+      external_id: 'slug-2', workspace: 'ws', project_slug: 'other', ide: 'cli'
+    });
+    app.conversationStore.addTurn({ conversation_id: c1.id, role: 'user', content: 'shared slugtest keyword' });
+    app.conversationStore.addTurn({ conversation_id: c2.id, role: 'user', content: 'shared slugtest keyword' });
+
+    const result = app.searchService.search({ query: 'slugtest', project_slug: 'platform' });
+    expect(result.conversations.length).toBe(1);
+    expect(result.conversations[0].id).toBe(c1.id);
+  });
+
+  test('search without project_slug returns all conversations', () => {
+    const { app } = createTempApp();
+    const c1 = app.conversationStore.upsertConversationByExternalId({
+      external_id: 'nofilter-1', workspace: 'ws', project_slug: 'a', ide: 'cli'
+    });
+    const c2 = app.conversationStore.upsertConversationByExternalId({
+      external_id: 'nofilter-2', workspace: 'ws', project_slug: 'b', ide: 'cli'
+    });
+    app.conversationStore.addTurn({ conversation_id: c1.id, role: 'user', content: 'unique nofiltertest' });
+    app.conversationStore.addTurn({ conversation_id: c2.id, role: 'user', content: 'unique nofiltertest' });
+
+    const result = app.searchService.search({ query: 'nofiltertest' });
+    expect(result.conversations.length).toBe(2);
+  });
+
+  test('project_slug filter works on summary/title fallback path', () => {
+    const { app } = createTempApp();
+    const c1 = app.conversationStore.upsertConversationByExternalId({
+      external_id: 'slug-title-1', workspace: 'ws', project_slug: 'myslug', ide: 'cli'
+    });
+    const c2 = app.conversationStore.upsertConversationByExternalId({
+      external_id: 'slug-title-2', workspace: 'ws', project_slug: 'otherslug', ide: 'cli'
+    });
+    app.conversationStore.upsertSummary(c1.id, 'summary about slugtitlekeyword');
+    app.conversationStore.upsertSummary(c2.id, 'summary about slugtitlekeyword');
+
+    const result = app.searchService.search({ query: 'slugtitlekeyword', project_slug: 'myslug' });
+    expect(result.conversations.length).toBe(1);
+    expect(result.conversations[0].id).toBe(c1.id);
+  });
+
   describe('FTS query sanitization', () => {
     test('hyphenated query like "self-test" does not crash', () => {
       const { app } = createTempApp();
