@@ -52,6 +52,11 @@ Three adapters (CLI, MCP, Dashboard) are wrappers over `AppContext`. They share 
 ## Project Structure
 
 ```
+skills/
+└── mem/                      AgentSkills skill (installed via npx skills add)
+    ├── SKILL.md              Entry point — routes /mem subcommands
+    └── commands/             Subcommand files (status, search, recent, summarize)
+
 src/
 ├── cli.ts                    CLI entry point (Commander)
 ├── app.ts                    AppContext factory — wires DB, config, stores, services
@@ -64,11 +69,9 @@ src/
 ├── services/
 │   ├── search-service.ts     FTS5 BM25 search + summary/title LIKE fallback
 │   ├── import-service.ts     Transcript import from Cursor/Claude/Codex JSONL
-│   ├── status-service.ts     Health check and aggregate stats
+│   ├── status-service.ts     Health check, stats, and MCP detection
 │   ├── usage-service.ts      MCP tool usage analytics and dashboard data
 │   └── config-service.ts     Load/save config from ~/.ai-memory/config.json
-├── hooks/
-│   └── init-config.ts        IDE MCP config registration + skill file generation
 ├── mcp/
 │   ├── server.ts             MCP tool handler map (5 tools)
 │   └── stdio.ts              MCP stdio transport + tool registration
@@ -80,12 +83,12 @@ src/
     ├── hash.ts               SHA-256 content hashing for turn dedup
     ├── id.ts                 UUID generation
     ├── time.ts               ISO timestamp helpers
+    ├── project-config.ts     Per-project config reading (.ai-memory/config.json)
     ├── workspace-identity.ts Stable project key derivation from workspace paths
     └── strip.ts              XML wrapper tag removal from captured prompts
 
 tests/                        Vitest — mirrors src/ structure
 docs/                         Style guides, this file
-design-logs/                  Design decision records (draft → approved → implemented)
 ```
 
 ### Layer responsibilities
@@ -271,14 +274,6 @@ ai-memory import-transcripts
 
 ## Adapter Details
 
-### Init Config (`mcp/init-config.ts`)
-
-Registers MCP server for each IDE and writes skill files for slash command support:
-
-- **Cursor**: MCP in `~/.cursor/mcp.json`
-- **Claude Code**: MCP via `claude mcp add` → `~/.claude.json`
-- **Codex**: `[mcp_servers.ai-memory]` in `~/.codex/config.toml`
-
 ### CLI (`cli.ts`)
 
 Commander-based. Uses lazy `getApp()` initialization so that `init` can run before the DB directory exists. Supports `--json` flag for machine-readable output.
@@ -289,39 +284,35 @@ Entry: `package.json` `"bin": "dist/cli.js"` → installed globally as `ai-memor
 
 | Command | Action |
 |---------|--------|
-| `init` | Multi-phase bootstrap (see below) |
+| `init` | Create DB + config (see below) |
 | `search` | FTS5 search with filters |
 | `conversations` | List conversations with pagination |
 | `conversation` | Get full transcript by ID |
 | `summarize` | Update conversation summary |
 | `title` | Update conversation title |
 | `import-transcripts` | Import JSONL from Cursor/Claude Code/Codex |
-| `status` | Health check and stats |
+| `status` | Health check, stats, and MCP registration detection |
 | `usage` | MCP tool usage analytics (`--range 24h\|7d\|30d`) |
 | `clean-data` | Strip XML wrapper tags from titles/summaries (`--dry-run` supported) |
 | `mcp` | Start MCP stdio server (+ file watcher) |
 | `config get\|set\|list` | Read/write config values |
+| `project init` | Create per-project `.ai-memory/config.json` |
+| `project status` | Show effective project config for current directory |
 | `dashboard` | Start local web UI |
 
 #### Init (`ai-memory init`)
 
-Multi-phase setup command. Phases run in order:
+Creates local data directory and database. Phases run in order:
 
 1. **Directories** — create `~/.ai-memory/` and `~/.ai-memory/services/`
 2. **Database** — create SQLite DB (optional `--reset-db` backs up existing DB first)
 3. **Config** — write `~/.ai-memory/config.json` with defaults if missing
-4. **IDE MCP** — register `ai-memory mcp` in selected IDE(s)
-5. **Skills** — write `SKILL.md` files for slash command support (`~/.<ide>/skills/ai-memory-*/` for Cursor/Claude Code, `~/.agents/skills/ai-memory-*/` for Codex)
 
-`--ide all` auto-detects installed IDEs by checking for `~/.cursor`, `~/.claude`, and `~/.codex` directories. Init is idempotent — re-running it won't duplicate MCP entries.
-
-For Claude Code, MCP registration is dual-path:
-- `~/.claude/settings.json` — declarative MCP entry
-- Runtime registration via `claude mcp add -s user ai-memory`, with fallback to writing `~/.claude.json` directly if the `claude` command is unavailable
+MCP registration and skill deployment are handled by ecosystem tools (`npx add-mcp` and `npx skills add`), not by init.
 
 ### MCP (`mcp/stdio.ts` + `mcp/server.ts`)
 
-[Model Context Protocol](https://modelcontextprotocol.io) server over stdio JSON-RPC. Also hosts the file watcher that imports IDE transcripts automatically. Registered by `ai-memory init` — for Cursor in `~/.cursor/mcp.json`, for Claude Code in both `settings.json` and via `claude mcp add` runtime registration.
+[Model Context Protocol](https://modelcontextprotocol.io) server over stdio JSON-RPC. Also hosts the file watcher that imports IDE transcripts automatically. Registered via `npx add-mcp "ai-memory mcp" -g -n ai-memory -y`.
 
 5 tools with Zod-validated input schemas:
 
@@ -335,16 +326,42 @@ For Claude Code, MCP registration is dual-path:
 
 Each handler is wrapped with `withTracking()` which records every call to the `tool_usage` table — tool name, timestamp, latency, parameter keys, result count, success/failure, and error classification. Error types are classified as `NOT_FOUND`, `VALIDATION`, or `INTERNAL`.
 
-4 IDE skill files for user-triggered slash commands (generated by `ai-memory init`, appear in IDE `/` autocomplete):
+User-triggered slash commands are provided as an [AgentSkills](https://agentskills.io) skill at `skills/mem/SKILL.md`, installed via `npx skills add liorhai5/ai-memory`. The skill provides a single `/mem` command with argument-based dispatch:
 
-| Skill | Arguments | Action |
-|-------|-----------|--------|
-| `ai-memory-status` | none | Instructs LLM to call `ai-memory-status` tool and present results |
-| `ai-memory-search` | `$ARGUMENTS` (query) | Instructs LLM to call `ai-memory-search` with the query |
-| `ai-memory-recent` | none | Instructs LLM to call `ai-memory-conversations` (limit 10) |
-| `ai-memory-summarize` | none | Instructs LLM to summarize the conversation and call `ai-memory-summarize` |
+| Subcommand | Action |
+|------------|--------|
+| `/mem status` | Instructs LLM to call `ai-memory-status` tool and present results |
+| `/mem search <query>` | Instructs LLM to call `ai-memory-search` with the query |
+| `/mem conversations` | Instructs LLM to call `ai-memory-conversations` (limit 10) |
+| `/mem summarize` | Instructs LLM to summarize the conversation and call `ai-memory-summarize` |
 
-Skills are written to `~/.<ide>/skills/ai-memory-*/SKILL.md` per IDE (Codex uses `~/.agents/skills/` per the Agent Skills standard). They complement tools: tools are LLM-initiated (autonomous), skills are user-initiated (explicit `/` command). All skills have `disable-model-invocation: true` so the LLM won't trigger them unprompted.
+Skills complement tools: tools are LLM-initiated (autonomous), skills are user-initiated (explicit `/` command). The skill has `disable-model-invocation: true` so the LLM won't trigger it unprompted.
+
+### Naming Conventions
+
+The API surface has three tiers with different prefix conventions:
+
+| Tier | Prefix | Example | Convention |
+|---|---|---|---|
+| CLI binary | `ai-memory <command>` | `ai-memory conversations` | Shell subcommands, spaces |
+| MCP tools | `ai-memory-<name>` | `ai-memory-conversations` | Flat identifiers, hyphens (MCP convention) |
+| Skill | `/mem <command>` | `/mem conversations` | Short prefix, brevity for IDE use |
+
+**Why different prefixes:** Each tier operates in a different namespace with different collision pressure. The CLI is a dedicated binary — `ai-memory` is unambiguous. MCP tools share a flat global namespace with every other MCP server — `ai-memory-` prefix prevents collisions. The skill shares `/` autocomplete with all other skills — `mem` is short to avoid clutter while staying recognizable.
+
+**The rule:** Same operation uses the same base noun across all layers. `conversations` appears as `ai-memory conversations` (CLI), `ai-memory-conversations` (MCP), and `/mem conversations` (skill). When adding a new operation, verify the noun appears identically in every layer that exposes it.
+
+**Operations exposed per tier:**
+
+| Operation | CLI | MCP | Skill |
+|---|---|---|---|
+| `conversations` | `ai-memory conversations` | `ai-memory-conversations` | `/mem conversations` |
+| `conversation` (single) | `ai-memory conversation <id>` | `ai-memory-conversation` | — |
+| `search` | `ai-memory search` | `ai-memory-search` | `/mem search` |
+| `summarize` | `ai-memory summarize` | `ai-memory-summarize` | `/mem summarize` |
+| `status` | `ai-memory status` | `ai-memory-status` | `/mem status` |
+
+CLI-only admin commands (`title`, `usage`, `dashboard`, `clean-data`, `import-transcripts`, `config`, `project init`, `project status`) are intentionally not exposed in MCP or skill — they are operator commands, not LLM-facing.
 
 ### Dashboard (`dashboard/`)
 

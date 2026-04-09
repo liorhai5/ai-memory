@@ -18,8 +18,21 @@ ai-memory logs every conversation and makes it searchable. It watches IDE transc
 ## Install
 
 ```bash
+# 1. Install the binary + create database
 npm install -g ai-memory
+ai-memory init
+
+# 2. Register MCP server (auto-detects all installed IDEs)
+npx add-mcp "ai-memory mcp" -g -n ai-memory -y
+
+# 3. Install skills (auto-detects all installed IDEs)
+npx skills add liorhai5/ai-memory
+
+# Verify
+ai-memory status
 ```
+
+Step 1 creates `~/.ai-memory/` (database + config). Step 2 registers the MCP server (LLM tools) across all detected IDEs. Step 3 installs slash commands (`/mem`). Each step is idempotent — safe to re-run.
 
 <details>
 <summary>From source</summary>
@@ -28,28 +41,9 @@ npm install -g ai-memory
 git clone <repo-url> && cd ai-memory
 npm install && npm run build:all
 npm link
+ai-memory init
 ```
 </details>
-
-## Set Up
-
-```bash
-# Initialize and connect to all detected IDEs (one-time, machine-level)
-ai-memory init --ide all
-
-# Or initialize for a specific IDE
-ai-memory init --ide cursor
-ai-memory init --ide claude-code
-ai-memory init --ide codex
-
-# CLI-only (no IDE integration)
-ai-memory init
-
-# Verify
-ai-memory status
-```
-
-This creates `~/.ai-memory/` (database + config), registers the MCP server (LLM tools), and generates skill files (slash commands). Run once — it applies to all projects on this machine. Re-running is safe (idempotent).
 
 ---
 
@@ -116,41 +110,26 @@ When your IDE supports [Model Context Protocol](https://modelcontextprotocol.io)
 | `ai-memory-summarize` | Update summary; optionally update title for the conversation |
 | `ai-memory-status` | Health check — conversation count, turn count, index status, active warnings |
 
-These tools are called autonomously by the LLM. For user-triggered commands, `ai-memory init` generates IDE skill files that appear in the `/` autocomplete:
+These tools are called autonomously by the LLM. For user-triggered commands, install the [AgentSkills](https://agentskills.io) skill:
 
-| Skill | Trigger | What it does |
-|-------|---------|-------------|
-| `ai-memory-status` | `/ai-memory-status` | Quick health check |
-| `ai-memory-search` | `/ai-memory-search <query>` | Search with a query argument |
-| `ai-memory-recent` | `/ai-memory-recent` | Last 10 conversations overview |
-| `ai-memory-summarize` | `/ai-memory-summarize` | Ask the LLM to summarize and save |
-
-Skills are written to `~/.<ide>/skills/ai-memory-*/SKILL.md` per IDE (Codex uses `~/.agents/skills/`) and work in Cursor, Claude Code, and Codex.
-
-MCP is auto-configured by `ai-memory init --ide <name>`. The init command registers the MCP server globally:
-
-| IDE | MCP config location |
-|-----|-------------------|
-| Cursor | `~/.cursor/mcp.json` |
-| Claude Code | `~/.claude/settings.json` |
-| Codex | `~/.codex/config.toml` (`[mcp_servers.ai-memory]`) |
-
-<details>
-<summary>Manual setup (if not using init)</summary>
-
-Add to your IDE's global MCP configuration:
-
-```json
-{
-  "mcpServers": {
-    "ai-memory": {
-      "command": "ai-memory",
-      "args": ["mcp"]
-    }
-  }
-}
+```bash
+npx skills add liorhai5/ai-memory
 ```
-</details>
+
+This provides a single `/mem` command with subcommands:
+
+| Command | What it does |
+|---------|-------------|
+| `/mem status` | Quick health check |
+| `/mem search <query>` | Search with a query argument |
+| `/mem conversations` | Last 10 conversations overview |
+| `/mem summarize` | Ask the LLM to summarize and save |
+
+MCP is registered across all detected IDEs with:
+
+```bash
+npx add-mcp "ai-memory mcp" -g -n ai-memory -y
+```
 
 ---
 
@@ -205,7 +184,7 @@ Import is idempotent — safe to rerun. Conversations are deduped by `external_i
 ## CLI Reference
 
 ```
-ai-memory init [--ide cursor|claude-code|codex|all] [--reset-db]
+ai-memory init [--reset-db]
 ai-memory status [--json]
 ai-memory search <text> [--workspace ...] [--from ...] [--to ...] [--role ...] [--limit ...] [--offset ...] [--json]
 ai-memory conversations [--workspace ...] [--from ...] [--to ...] [--limit ...] [--offset ...] [--json]
@@ -215,6 +194,8 @@ ai-memory title <id> <title> [--json]
 ai-memory import-transcripts [--source cursor|claude-code|codex|all] [--force-summary] [--json]
 ai-memory usage [--range 24h|7d|30d] [--json]
 ai-memory config get|set|list
+ai-memory project init [--slug ...] [--skip]
+ai-memory project status [--json]
 ai-memory clean-data [--dry-run] [--json]
 ai-memory dashboard [--port ...] [--no-open]
 ai-memory mcp
@@ -265,6 +246,11 @@ npm test          # Vitest — all suites
 ### Project Structure
 
 ```
+skills/
+└── mem/                              AgentSkills skill (installed via npx skills add)
+    ├── SKILL.md                      Entry point — routes /mem subcommands
+    └── commands/                     Subcommand files (status, search, recent, summarize)
+
 src/
 ├── cli.ts                            CLI entry point
 ├── app.ts                            Application context (wires all services)
@@ -277,11 +263,9 @@ src/
 ├── services/
 │   ├── search-service.ts             FTS5 BM25 search + summary/title fallback
 │   ├── import-service.ts             Transcript import from Cursor/Claude/Codex JSONL
-│   ├── status-service.ts             Health check and stats
+│   ├── status-service.ts             Health check, stats, and MCP detection
 │   ├── usage-service.ts              MCP usage analytics
 │   └── config-service.ts             Configuration management
-├── hooks/
-│   └── init-config.ts                IDE MCP config + skill file generation
 ├── mcp/
 │   ├── server.ts                     MCP tool handlers
 │   └── stdio.ts                      MCP stdio transport + tool registration
@@ -293,6 +277,7 @@ src/
     ├── hash.ts                       Content hashing
     ├── id.ts                         ID generation
     ├── strip.ts                      IDE wrapper tag stripping
+    ├── project-config.ts             Per-project config reading
     ├── workspace-identity.ts         Stable project identity derivation
     └── time.ts                       ISO timestamp helpers
 ```
