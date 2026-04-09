@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from './app.js';
 import { getConfigValue, setConfigValue, loadConfig, saveConfig } from './services/config-service.js';
-import { registerCursorMcp, registerCodexMcp, writeSkills } from './mcp/init-config.js';
 import { stripPromptWrappers } from './utils/strip.js';
-import type { IdeType } from './types.js';
+import { readProjectConfig } from './utils/project-config.js';
 import { parseUsageRange } from './services/usage-service.js';
 
 function out(data: unknown, json = false): void {
@@ -30,52 +28,11 @@ function getApp(): ReturnType<typeof createApp> {
   return _app;
 }
 
-function ensureClaudeRegistryFile(home: string): 'created' | 'exists' {
-  const registryPath = join(home, '.claude.json');
-  let data: any = {};
-  if (existsSync(registryPath)) {
-    try {
-      data = JSON.parse(readFileSync(registryPath, 'utf8'));
-    } catch {
-      data = {};
-    }
-  }
-  data.mcpServers ??= {};
-  if (data.mcpServers['ai-memory']) return 'exists';
-  data.mcpServers['ai-memory'] = { command: 'ai-memory', args: ['mcp'] };
-  writeFileSync(registryPath, JSON.stringify(data, null, 2));
-  return 'created';
-}
-
-function syncClaudeRuntimeMcp(home: string): { path: string; status: 'created' | 'exists' } {
-  const registryPath = join(home, '.claude.json');
-  const env = { ...process.env, HOME: home };
-  const claudeVersion = spawnSync('claude', ['--version'], { encoding: 'utf8', env });
-  if (claudeVersion.status === 0) {
-    const existsCheck = spawnSync('claude', ['mcp', 'get', 'ai-memory'], { encoding: 'utf8', env });
-    if (existsCheck.status === 0) {
-      return { path: registryPath, status: 'exists' };
-    }
-    const add = spawnSync('claude', ['mcp', 'add', '-s', 'user', 'ai-memory', '--', 'ai-memory', 'mcp'], {
-      encoding: 'utf8',
-      env
-    });
-    if (add.status === 0) {
-      return { path: registryPath, status: 'created' };
-    }
-  }
-
-  // Fallback path for environments where `claude mcp` is unavailable.
-  return { path: registryPath, status: ensureClaudeRegistryFile(home) };
-}
-
-
 const program = new Command();
 program.name('ai-memory').description('ai-memory conversation memory CLI').version('0.2.0');
 
 program
   .command('init')
-  .option('--ide <ide>', 'Register MCP + skills for IDE: cursor | claude-code | codex | all')
   .option('--reset-db', 'Backup old DB and reset to new schema')
   .option('--json')
   .action((opts) => {
@@ -108,63 +65,14 @@ program
     }
     phases.push({ phase: 'config', path: configFile, status: configExisted ? 'exists' : 'created' });
 
-    // Phase 4-5: MCP registration + skills
-    let ides: IdeType[] = [];
-    if (opts.ide === 'all') {
-      if (existsSync(join(home, '.cursor'))) ides.push('cursor');
-      if (existsSync(join(home, '.claude'))) ides.push('claude-code');
-      if (existsSync(join(home, '.codex'))) ides.push('codex');
-      if (ides.length === 0) {
-        phases.push({ phase: 'ide-detection', path: home, status: 'exists' });
-      }
-    } else if (opts.ide) {
-      const validIdes = ['cursor', 'claude-code', 'codex'] as const;
-      if (!validIdes.includes(opts.ide)) {
-        console.error(`Error: unknown IDE "${opts.ide}". Valid options: ${validIdes.join(', ')}, all`);
-        process.exit(1);
-      }
-      ides = [opts.ide as IdeType];
-    }
-
-    for (const ide of ides) {
-      if (ide === 'cursor') {
-        const mcpPath = join(home, '.cursor/mcp.json');
-        registerCursorMcp(mcpPath);
-        phases.push({ phase: 'mcp', path: mcpPath, status: 'created' });
-      } else if (ide === 'claude-code') {
-        const runtimeMcp = syncClaudeRuntimeMcp(home);
-        phases.push({ phase: 'mcp', path: runtimeMcp.path, status: runtimeMcp.status });
-      } else if (ide === 'codex') {
-        const configPath = join(home, '.codex/config.toml');
-        const codexResult = registerCodexMcp(configPath);
-        phases.push({ phase: 'mcp', path: configPath, status: codexResult.status });
-      }
-
-      // D040: Write skill files for slash command support
-      const skills = writeSkills(ide, home);
-      const skillBase = ide === 'codex' ? '~/.agents/skills' : `~/.${ide === 'claude-code' ? 'claude' : ide}/skills`;
-      for (const name of skills.written) {
-        phases.push({ phase: 'skill', path: `${skillBase}/${name}/SKILL.md`, status: 'created' });
-      }
-      for (const name of skills.skipped) {
-        phases.push({ phase: 'skill', path: `${skillBase}/${name}/SKILL.md`, status: 'exists' });
-      }
-    }
-
     if (!opts.json) {
       console.log(`✓ Initialized ai-memory at ${aiMemoryDir}`);
       for (const p of phases) {
-        if (p.phase === 'ide-detection') {
-          console.log(`  ⚠ No supported IDEs detected`);
-        } else {
-          console.log(`  ${p.path}  ${p.status}`);
-        }
+        console.log(`  ${p.path}  ${p.status}`);
       }
       console.log(`\nRun 'ai-memory status' to verify.`);
     } else {
-      const result: any = { ok: true, path: aiMemoryDir, db: dbPath, phases };
-      if (opts.ide) result.ide = opts.ide === 'all' ? ides : [opts.ide];
-      out(result, true);
+      out({ ok: true, path: aiMemoryDir, db: dbPath, phases }, true);
     }
     process.exit(0);
   });
@@ -211,6 +119,44 @@ projectCmd
       console.log('Edit the file to customize. Available fields:');
       console.log('  project_slug  — stable grouping label (survives directory moves)');
       console.log('  skip          — set to true to exclude from memory import');
+    }
+    process.exit(0);
+  });
+
+projectCmd
+  .command('status')
+  .description('Show effective project config for current directory')
+  .option('--json')
+  .action((opts) => {
+    const cwd = process.cwd();
+    const config = readProjectConfig(cwd);
+
+    const slug = config?.project_slug ?? null;
+    const skip = config?.skip ?? false;
+    const configPath = join(cwd, '.ai-memory', 'config.json');
+    const configFound = existsSync(configPath);
+
+    let conversationCount: number | null = null;
+    if (slug) {
+      try {
+        const app = getApp();
+        const rows = app.db.prepare(
+          `SELECT COUNT(*) as cnt FROM conversations WHERE project_slug = ?`
+        ).get(slug) as { cnt: number } | undefined;
+        conversationCount = rows?.cnt ?? 0;
+      } catch { /* DB may not exist yet */ }
+    }
+
+    if (opts.json) {
+      out({ project_dir: cwd, config_found: configFound, project_slug: slug, skip, conversations: conversationCount }, true);
+    } else {
+      console.log(`Project directory:  ${cwd}`);
+      console.log(`  .ai-memory/config.json:   ${configFound ? 'found' : 'not found'}`);
+      console.log(`  project_slug:              ${slug ?? '(none)'}`);
+      console.log(`  skip:                      ${skip}`);
+      if (conversationCount !== null) {
+        console.log(`  Conversations stored:      ${conversationCount}`);
+      }
     }
     process.exit(0);
   });

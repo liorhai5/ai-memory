@@ -1,4 +1,7 @@
 import type Database from 'better-sqlite3';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 export class StatusService {
   constructor(private readonly db: Database.Database, private readonly dbPath: string) {}
@@ -13,8 +16,32 @@ export class StatusService {
       index_status: 'ok',
       last_run: new Date().toISOString(),
       tool_usage: this.getToolUsage(),
-      warnings: this.getActiveWarnings()
+      warnings: this.getActiveWarnings(),
+      mcp_registered: this.detectMcpRegistration()
     };
+  }
+
+  detectMcpRegistration(): string[] {
+    const home = homedir();
+    const registered: string[] = [];
+    const checks: Array<{ ide: string; path: string; format: 'json' | 'toml' }> = [
+      { ide: 'claude-code', path: join(home, '.claude.json'), format: 'json' },
+      { ide: 'cursor', path: join(home, '.cursor', 'mcp.json'), format: 'json' },
+      { ide: 'codex', path: join(home, '.codex', 'config.toml'), format: 'toml' },
+    ];
+    for (const check of checks) {
+      if (!existsSync(check.path)) continue;
+      try {
+        const content = readFileSync(check.path, 'utf8');
+        if (check.format === 'json') {
+          const data = JSON.parse(content);
+          if (data?.mcpServers?.['ai-memory']) registered.push(check.ide);
+        } else {
+          if (content.includes('[mcp_servers.ai-memory]')) registered.push(check.ide);
+        }
+      } catch { /* skip unreadable configs */ }
+    }
+    return registered;
   }
 
   // D038 D12: Surface active health warnings in status output
