@@ -332,10 +332,36 @@ User-triggered slash commands are provided as an [AgentSkills](https://agentskil
 |------------|--------|
 | `/mem status` | Instructs LLM to call `ai-memory-status` tool and present results |
 | `/mem search <query>` | Instructs LLM to call `ai-memory-search` with the query |
-| `/mem recent` | Instructs LLM to call `ai-memory-conversations` (limit 10) |
+| `/mem conversations` | Instructs LLM to call `ai-memory-conversations` (limit 10) |
 | `/mem summarize` | Instructs LLM to summarize the conversation and call `ai-memory-summarize` |
 
 Skills complement tools: tools are LLM-initiated (autonomous), skills are user-initiated (explicit `/` command). The skill has `disable-model-invocation: true` so the LLM won't trigger it unprompted.
+
+### Naming Conventions
+
+The API surface has three tiers with different prefix conventions:
+
+| Tier | Prefix | Example | Convention |
+|---|---|---|---|
+| CLI binary | `ai-memory <command>` | `ai-memory conversations` | Shell subcommands, spaces |
+| MCP tools | `ai-memory-<name>` | `ai-memory-conversations` | Flat identifiers, hyphens (MCP convention) |
+| Skill | `/mem <command>` | `/mem conversations` | Short prefix, brevity for IDE use |
+
+**Why different prefixes:** Each tier operates in a different namespace with different collision pressure. The CLI is a dedicated binary — `ai-memory` is unambiguous. MCP tools share a flat global namespace with every other MCP server — `ai-memory-` prefix prevents collisions. The skill shares `/` autocomplete with all other skills — `mem` is short to avoid clutter while staying recognizable.
+
+**The rule:** Same operation uses the same base noun across all layers. `conversations` appears as `ai-memory conversations` (CLI), `ai-memory-conversations` (MCP), and `/mem conversations` (skill). When adding a new operation, verify the noun appears identically in every layer that exposes it.
+
+**Operations exposed per tier:**
+
+| Operation | CLI | MCP | Skill |
+|---|---|---|---|
+| `conversations` | `ai-memory conversations` | `ai-memory-conversations` | `/mem conversations` |
+| `conversation` (single) | `ai-memory conversation <id>` | `ai-memory-conversation` | — |
+| `search` | `ai-memory search` | `ai-memory-search` | `/mem search` |
+| `summarize` | `ai-memory summarize` | `ai-memory-summarize` | `/mem summarize` |
+| `status` | `ai-memory status` | `ai-memory-status` | `/mem status` |
+
+CLI-only admin commands (`title`, `usage`, `dashboard`, `clean-data`, `import-transcripts`, `config`, `project init`, `project status`) are intentionally not exposed in MCP or skill — they are operator commands, not LLM-facing.
 
 ### Dashboard (`dashboard/`)
 
