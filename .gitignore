@@ -2,10 +2,9 @@ node_modules/
 dist/
 *.log
 .DS_Store
-design-logs/
-research-logs/
-screenshots/
+.ai/
 .claude/
 .codex/
 .cursor/
 .gemini/
+.ai-memory/
