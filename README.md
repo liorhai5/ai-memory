@@ -32,7 +32,7 @@ npx skills add liorhai5/ai-memory
 ai-memory status
 ```
 
-Step 1 creates `~/.ai-memory/` (database + config). Step 2 registers the MCP server (LLM tools) across all detected IDEs. Step 3 installs slash commands (`/ai-memory`). Each step is idempotent — safe to re-run.
+Step 1 creates `~/.ai-memory/` (database + config). Step 2 registers the MCP server (LLM tools) across all detected IDEs. Step 3 installs slash commands (`/mem`). Each step is idempotent — safe to re-run.
 
 <details>
 <summary>From source</summary>
@@ -116,14 +116,14 @@ These tools are called autonomously by the LLM. For user-triggered commands, ins
 npx skills add liorhai5/ai-memory
 ```
 
-This provides a single `/ai-memory` command with subcommands:
+This provides a single `/mem` command with subcommands:
 
 | Command | What it does |
 |---------|-------------|
-| `/ai-memory status` | Quick health check |
-| `/ai-memory search <query>` | Search with a query argument |
-| `/ai-memory recent` | Last 10 conversations overview |
-| `/ai-memory summarize` | Ask the LLM to summarize and save |
+| `/mem status` | Quick health check |
+| `/mem search <query>` | Search with a query argument |
+| `/mem recent` | Last 10 conversations overview |
+| `/mem summarize` | Ask the LLM to summarize and save |
 
 MCP is registered across all detected IDEs with:
 
@@ -247,8 +247,8 @@ npm test          # Vitest — all suites
 
 ```
 skills/
-└── ai-memory/                        AgentSkills skill (installed via npx skills add)
-    ├── SKILL.md                      Entry point — routes /ai-memory subcommands
+└── mem/                              AgentSkills skill (installed via npx skills add)
+    ├── SKILL.md                      Entry point — routes /mem subcommands
     └── commands/                     Subcommand files (status, search, recent, summarize)
 
 src/

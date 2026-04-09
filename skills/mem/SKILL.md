@@ -1,11 +1,11 @@
 ---
-name: ai-memory
+name: mem
 description: Search and browse AI conversation history. Requires ai-memory MCP server.
 argument-hint: "status | search <query> | recent | summarize"
 disable-model-invocation: true
 ---
 
-# ai-memory
+# mem
 
 Requires the ai-memory MCP server. If tools are unavailable, run:
 `npx add-mcp "ai-memory mcp" -g -n ai-memory -y`
