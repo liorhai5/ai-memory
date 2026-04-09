@@ -254,28 +254,26 @@ function buildIntegrationStatus(ctx: AppContext) {
   };
 }
 
-const EXPECTED_SKILLS = ['ai-memory-status', 'ai-memory-search', 'ai-memory-recent', 'ai-memory-summarize'];
+const SKILL_NAME = 'mem';
 
 function buildSkillsStatus() {
   const home = homedir();
-  const ideDirs: Array<{ ide: string; dir: string }> = [
-    { ide: 'claude_code', dir: join(home, '.claude', 'skills') },
-    { ide: 'cursor', dir: join(home, '.cursor', 'skills') },
-    { ide: 'codex', dir: join(home, '.agents', 'skills') },
+  const universal = join(home, '.agents', 'skills', SKILL_NAME, 'SKILL.md');
+  const universalInstalled = existsSync(universal);
+
+  // Each IDE reads skills from its own dir OR the universal ~/.agents/skills/ dir
+  const ideDirs: Array<{ ide: string; dirs: string[] }> = [
+    { ide: 'claude_code', dirs: [join(home, '.claude', 'skills'), join(home, '.agents', 'skills')] },
+    { ide: 'cursor', dirs: [join(home, '.cursor', 'skills'), join(home, '.agents', 'skills')] },
+    { ide: 'codex', dirs: [join(home, '.agents', 'skills')] },
   ];
 
-  const byIde: Record<string, { installed: number; total: number; missing: string[] }> = {};
-  for (const { ide, dir } of ideDirs) {
-    const missing: string[] = [];
-    for (const skill of EXPECTED_SKILLS) {
-      if (!existsSync(join(dir, skill, 'SKILL.md'))) {
-        missing.push(skill);
-      }
-    }
-    byIde[ide] = { installed: EXPECTED_SKILLS.length - missing.length, total: EXPECTED_SKILLS.length, missing };
+  const byIde: Record<string, { installed: boolean }> = {};
+  for (const { ide, dirs } of ideDirs) {
+    byIde[ide] = { installed: dirs.some(dir => existsSync(join(dir, SKILL_NAME, 'SKILL.md'))) };
   }
 
-  return { expected: EXPECTED_SKILLS, by_ide: byIde };
+  return { skill: SKILL_NAME, universal_installed: universalInstalled, by_ide: byIde };
 }
 
 function getDashboardStatus(ctx: AppContext) {

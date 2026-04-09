@@ -47,8 +47,9 @@ interface StatusPayload {
     import_error_count: number;
   };
   skills: {
-    expected: string[];
-    by_ide: Record<string, { installed: number; total: number; missing: string[] }>;
+    skill: string;
+    universal_installed: boolean;
+    by_ide: Record<string, { installed: boolean }>;
   };
   config_snapshot: {
     search_default_limit: number;
@@ -267,19 +268,13 @@ export function StatusView({ active, onRefreshStateChange }: StatusViewProps) {
           </Section>
 
           <Section title="Skills">
-            <div className="status-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+            <div className="status-card">
+              <div className="status-card-k">/mem</div>
+              <div className="status-list-row"><span>Universal install</span><BoolBadge ok={data.skills.universal_installed} /></div>
               {Object.entries(data.skills.by_ide).map(([ide, info]) => (
-                <div key={ide} className="status-card">
-                  <div className="status-card-k">{ide.replace('_', ' ')}</div>
-                  <div className="status-list-row">
-                    <span>Installed</span>
-                    <span className="status-mono">{info.installed}/{info.total}</span>
-                  </div>
-                  {info.missing.length > 0 && (
-                    <div className="status-note" style={{ color: 'var(--accent-yellow)' }}>
-                      Missing: {info.missing.join(', ')}
-                    </div>
-                  )}
+                <div key={ide} className="status-list-row">
+                  <span>{ide.replace('_', ' ')}</span>
+                  <BoolBadge ok={info.installed} />
                 </div>
               ))}
             </div>
