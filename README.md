@@ -122,7 +122,7 @@ This provides a single `/mem` command with subcommands:
 |---------|-------------|
 | `/mem status` | Quick health check |
 | `/mem search <query>` | Search with a query argument |
-| `/mem recent` | Last 10 conversations overview |
+| `/mem conversations` | Last 10 conversations overview |
 | `/mem summarize` | Ask the LLM to summarize and save |
 
 MCP is registered across all detected IDEs with:

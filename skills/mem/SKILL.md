@@ -1,7 +1,7 @@
 ---
 name: mem
 description: Search and browse AI conversation history. Requires ai-memory MCP server.
-argument-hint: "status | search <query> | recent | summarize"
+argument-hint: "status | search <query> | conversations | summarize"
 disable-model-invocation: true
 ---
 
@@ -18,7 +18,7 @@ Based on $ARGUMENTS, read and follow the relevant command file:
 |---|---|---|
 | status | commands/status.md | Health check — conversation count, turn count, tool usage |
 | search <query> | commands/search.md | Full-text search over conversation history |
-| recent | commands/recent.md | Last 10 conversations with titles and summaries |
+| conversations | commands/conversations.md | Last 10 conversations with titles and summaries |
 | summarize | commands/summarize.md | Summarize this conversation and save to ai-memory |
 
 If no command matches, show this table and ask what the user needs.
