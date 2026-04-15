@@ -20,9 +20,9 @@ export async function startStdioServer(dbPath: string) {
 
   server.tool(
     'ai-memory-search',
-    'Search conversation history. Returns matching conversations with turn snippets. Results are limited (default 20) — check has_more in the response; if true, use offset to fetch the next page.',
+    'Search past conversations using SQLite FTS5. Supports BM25 ranking, quoted phrases for exact match. Cascades from AND to OR on low results. Paginated — check has_more and use offset.',
     {
-      query: z.string().optional().describe('Search query text'),
+      query: z.string().optional().describe('FTS5 query — use 1–3 keywords, not sentences. Supports "quoted phrases". Stop words are stripped automatically.'),
       workspace: z.string().nullable().optional().describe('Filter by workspace name'),
       date_from: z.string().optional().describe('ISO date lower bound (filters on updated_at)'),
       date_to: z.string().optional().describe('ISO date upper bound (filters on updated_at)'),

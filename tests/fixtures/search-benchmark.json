@@ -1,0 +1,74 @@
+[
+  {
+    "query": "how did we implement the usage tracking service",
+    "description": "Natural language query — should cascade to OR and find 'usage' and 'tracking' terms",
+    "setup_content": "we implemented the usage tracking service with event listeners",
+    "expect_match": true
+  },
+  {
+    "query": "conversation about implementing the search feature for dashboard",
+    "description": "Verbose LLM-style query — should cascade and match on 'search', 'feature', 'dashboard'",
+    "setup_content": "the dashboard search feature uses FTS5 for full-text indexing",
+    "expect_match": true
+  },
+  {
+    "query": "dashboard",
+    "description": "Single keyword — AND pass should succeed directly",
+    "setup_content": "dashboard layout was redesigned with a sidebar",
+    "expect_match": true
+  },
+  {
+    "query": "dashboard search",
+    "description": "Two keywords — AND pass should succeed when both present",
+    "setup_content": "the dashboard search bar filters conversations in real time",
+    "expect_match": true
+  },
+  {
+    "query": "\"design log\"",
+    "description": "Quoted phrase — exact phrase match via FTS5",
+    "setup_content": "created a new design log for the auth rewrite",
+    "expect_match": true
+  },
+  {
+    "query": "\"init config\"",
+    "description": "Quoted phrase — exact phrase match",
+    "setup_content": "run init config to set up the project defaults",
+    "expect_match": true
+  },
+  {
+    "query": "CSS fixes",
+    "description": "Two keywords where AND may fail — cascade to OR should recover",
+    "setup_content": "applied CSS tweaks and several bug fixes to the layout",
+    "expect_match": true
+  },
+  {
+    "query": "what is the best way to handle authentication",
+    "description": "Long natural language — stop words stripped, OR on 'best', 'way', 'handle', 'authentication'",
+    "setup_content": "we decided to handle authentication with JWT tokens",
+    "expect_match": true
+  },
+  {
+    "query": "\"hello world",
+    "description": "Unbalanced quote — should auto-close and match as phrase",
+    "setup_content": "the hello world example was added to the docs",
+    "expect_match": true
+  },
+  {
+    "query": "",
+    "description": "Empty query — should return no results gracefully",
+    "setup_content": "some content that should not match",
+    "expect_match": false
+  },
+  {
+    "query": "kubernetes deployment strategy",
+    "description": "Three technical keywords — AND may fail, OR recovers on individual terms",
+    "setup_content": "discussed kubernetes cluster setup and deployment automation strategy",
+    "expect_match": true
+  },
+  {
+    "query": "how to fix the bug",
+    "description": "Mostly stop words — after stripping: 'fix', 'bug'. OR should find them",
+    "setup_content": "found a critical bug in the parser, need to fix it before release",
+    "expect_match": true
+  }
+]
