@@ -3,6 +3,15 @@ import type { AiMemoryConfig } from './config-service.js';
 import type { SearchConversationMatch, SearchParams } from '../types.js';
 import { normalizeWorkspaceLabel } from '../utils/workspace-identity.js';
 
+const STOP_WORDS = new Set([
+  'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'shall',
+  'should', 'can', 'could', 'may', 'might', 'must', 'of', 'in', 'to',
+  'for', 'on', 'at', 'by', 'with', 'from', 'about', 'into', 'it', 'its',
+  'we', 'i', 'you', 'he', 'she', 'they', 'this', 'that', 'how', 'what',
+  'when', 'where', 'which', 'who', 'not', 'no', 'or', 'and', 'but'
+]);
+
 export interface SearchResult {
   conversations: SearchConversationMatch[];
   total: number;
@@ -10,7 +19,36 @@ export interface SearchResult {
 }
 
 function sanitizeFtsQuery(query: string): string {
-  return query.replace(/[,.\-!"#$%&'()*+/:;<=>?@[\\\]^_`{|}~]/g, ' ').trim();
+  let sanitized = query.replace(/[,.\-!#$%&'()*+/:;<=>?@[\\\]^_`{|}~]/g, ' ').trim();
+  const quoteCount = (sanitized.match(/"/g) || []).length;
+  if (quoteCount % 2 !== 0) sanitized += '"';
+  return sanitized;
+}
+
+interface ParsedQuery {
+  phrases: string[];
+  bareWords: string[];
+}
+
+function parseQuery(sanitized: string): ParsedQuery {
+  const phrases: string[] = [];
+  const withoutPhrases = sanitized.replace(/"([^"]+)"/g, (_match, phrase) => {
+    phrases.push(`"${phrase}"`);
+    return ' ';
+  });
+  const bareWords = withoutPhrases.split(/\s+/).filter(w => w.length > 0);
+  return { phrases, bareWords };
+}
+
+function buildAndQuery(parsed: ParsedQuery): string {
+  return [...parsed.phrases, ...parsed.bareWords].join(' ');
+}
+
+function buildOrQuery(parsed: ParsedQuery): string | null {
+  const filteredWords = parsed.bareWords.filter(w => !STOP_WORDS.has(w.toLowerCase()));
+  const terms = [...parsed.phrases, ...filteredWords];
+  if (terms.length === 0) return null;
+  return terms.join(' OR ');
 }
 
 export class SearchService {
@@ -20,81 +58,136 @@ export class SearchService {
     this.defaultLimit = config.search_default_limit;
   }
 
+  private static readonly CASCADE_THRESHOLD = 3;
+
+  private ftsSearch(
+    ftsQuery: string,
+    input: SearchParams,
+    limit: number
+  ): Array<{
+    id: string;
+    title: string | null;
+    summary: string | null;
+    workspace: string | null;
+    ide: string | null;
+    started_at: string;
+    turn_count: number;
+    role: string;
+    content: string;
+    turn_number: number;
+  }> {
+    const where: string[] = ['turns_fts MATCH ?'];
+    const params: unknown[] = [ftsQuery];
+    if (typeof input.workspace !== 'undefined') {
+      const normalizedWorkspace = normalizeWorkspaceLabel(input.workspace);
+      where.push('c.workspace IS ?');
+      params.push(normalizedWorkspace);
+    }
+    if (typeof input.project_slug !== 'undefined') {
+      where.push('c.project_slug IS ?');
+      params.push(input.project_slug);
+    }
+    if (input.date_from) {
+      where.push('c.updated_at >= ?');
+      params.push(input.date_from);
+    }
+    if (input.date_to) {
+      where.push('c.updated_at <= ?');
+      params.push(input.date_to);
+    }
+    if (input.role) {
+      where.push('t.role = ?');
+      params.push(input.role);
+    }
+    return this.db
+      .prepare(
+        `
+        SELECT
+          c.id, c.title, c.summary, c.workspace, c.ide, c.started_at, c.turn_count,
+          t.role, t.content, t.turn_number
+        FROM turns_fts
+        JOIN turns t ON t.id = turns_fts.id
+        JOIN conversations c ON c.id = t.conversation_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY bm25(turns_fts), c.updated_at DESC
+        LIMIT ? OFFSET ?
+        `
+      )
+      .all(...params, limit * 3, 0) as Array<{
+      id: string;
+      title: string | null;
+      summary: string | null;
+      workspace: string | null;
+      ide: string | null;
+      started_at: string;
+      turn_count: number;
+      role: string;
+      content: string;
+      turn_number: number;
+    }>;
+  }
+
+  private collectTurnRows(
+    turnMatches: Array<{
+      id: string;
+      title: string | null;
+      summary: string | null;
+      workspace: string | null;
+      ide: string | null;
+      started_at: string;
+      turn_count: number;
+      role: string;
+      content: string;
+      turn_number: number;
+    }>,
+    seen: Set<string>,
+    maxRows: number
+  ): SearchConversationMatch[] {
+    const rows: SearchConversationMatch[] = [];
+    for (const row of turnMatches) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      rows.push({
+        id: row.id,
+        title: row.title,
+        summary: row.summary,
+        workspace: row.workspace,
+        ide: row.ide,
+        started_at: row.started_at,
+        turn_count: row.turn_count,
+        match_source: 'turn',
+        matching_turns: [{ role: row.role, content: row.content, turn_number: row.turn_number }]
+      });
+      if (rows.length >= maxRows) break;
+    }
+    return rows;
+  }
+
   search(input: SearchParams): SearchResult {
     const limit = input.limit ?? this.defaultLimit;
     const offset = input.offset ?? 0;
-    const rows: SearchConversationMatch[] = [];
+    let rows: SearchConversationMatch[] = [];
     const seen = new Set<string>();
     const query = (input.query ?? '').trim();
     const sanitized = sanitizeFtsQuery(query);
 
     if (sanitized.length > 0) {
-      const where: string[] = ['turns_fts MATCH ?'];
-      const params: unknown[] = [sanitized];
-      if (typeof input.workspace !== 'undefined') {
-        const normalizedWorkspace = normalizeWorkspaceLabel(input.workspace);
-        where.push('c.workspace IS ?');
-        params.push(normalizedWorkspace);
-      }
-      if (typeof input.project_slug !== 'undefined') {
-        where.push('c.project_slug IS ?');
-        params.push(input.project_slug);
-      }
-      if (input.date_from) {
-        where.push('c.updated_at >= ?');
-        params.push(input.date_from);
-      }
-      if (input.date_to) {
-        where.push('c.updated_at <= ?');
-        params.push(input.date_to);
-      }
-      if (input.role) {
-        where.push('t.role = ?');
-        params.push(input.role);
-      }
+      const parsed = parseQuery(sanitized);
+      const andQuery = buildAndQuery(parsed);
 
-      const turnMatches = this.db
-        .prepare(
-          `
-          SELECT
-            c.id, c.title, c.summary, c.workspace, c.ide, c.started_at, c.turn_count,
-            t.role, t.content, t.turn_number
-          FROM turns_fts
-          JOIN turns t ON t.id = turns_fts.id
-          JOIN conversations c ON c.id = t.conversation_id
-          WHERE ${where.join(' AND ')}
-          ORDER BY bm25(turns_fts), c.updated_at DESC
-          LIMIT ? OFFSET ?
-          `
-        )
-        .all(...params, limit * 3, 0) as Array<{
-        id: string;
-        title: string | null;
-        summary: string | null;
-        workspace: string | null;
-        ide: string | null;
-        started_at: string;
-        turn_count: number;
-        role: string;
-        content: string;
-        turn_number: number;
-      }>;
+      if (andQuery.length > 0) {
+        const andMatches = this.ftsSearch(andQuery, input, limit);
+        rows = this.collectTurnRows(andMatches, seen, limit + offset + 1);
 
-      for (const row of turnMatches) {
-        if (seen.has(row.id)) continue;
-        seen.add(row.id);
-        rows.push({
-          id: row.id,
-          title: row.title,
-          summary: row.summary,
-          workspace: row.workspace,
-          ide: row.ide,
-          started_at: row.started_at,
-          turn_count: row.turn_count,
-          match_source: 'turn',
-          matching_turns: [{ role: row.role, content: row.content, turn_number: row.turn_number }]
-        });
-        if (rows.length >= limit + offset + 1) break;
+        if (rows.length < SearchService.CASCADE_THRESHOLD) {
+          const orQuery = buildOrQuery(parsed);
+          if (orQuery && orQuery !== andQuery) {
+            seen.clear();
+            rows = [];
+            const orMatches = this.ftsSearch(orQuery, input, limit);
+            rows = this.collectTurnRows(orMatches, seen, limit + offset + 1);
+          }
+        }
       }
     }
 

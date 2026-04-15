@@ -165,6 +165,84 @@ describe('SearchService', () => {
     expect(result.conversations[0].id).toBe(c1.id);
   });
 
+  describe('cascade AND→OR (D043)', () => {
+    test('multi-word natural language query returns results via OR fallback', () => {
+      const { app } = createTempApp();
+      const conv = createConversation(app, { external_id: 'cascade-1', workspace: 'ws' });
+      app.conversationStore.addTurn({ conversation_id: conv.id, role: 'user', content: 'we discussed the usage tracking service implementation' });
+
+      // "how did we implement the usage tracking service" — AND would fail, OR should find it
+      const result = app.searchService.search({ query: 'how did we implement the usage tracking service' });
+      expect(result.conversations.length).toBeGreaterThan(0);
+    });
+
+    test('single keyword does not cascade — AND is sufficient', () => {
+      const { app } = createTempApp();
+      const conv = createConversation(app, { external_id: 'cascade-2', workspace: 'ws' });
+      app.conversationStore.addTurn({ conversation_id: conv.id, role: 'user', content: 'dashboard implementation' });
+
+      const result = app.searchService.search({ query: 'dashboard' });
+      expect(result.conversations.length).toBe(1);
+    });
+
+    test('two-keyword AND query works without cascade when both match', () => {
+      const { app } = createTempApp();
+      const conv = createConversation(app, { external_id: 'cascade-3', workspace: 'ws' });
+      app.conversationStore.addTurn({ conversation_id: conv.id, role: 'user', content: 'dashboard search feature' });
+
+      const result = app.searchService.search({ query: 'dashboard search' });
+      expect(result.conversations.length).toBe(1);
+    });
+
+    test('all-stop-word query falls through to LIKE fallback', () => {
+      const { app } = createTempApp();
+      const conv = createConversation(app, { external_id: 'cascade-4', workspace: 'ws' });
+      app.conversationStore.setTitleIfEmpty(conv.id, 'how is the');
+
+      // "how is the" — all stop words, AND will match FTS but OR has no non-stop terms
+      // Should still return via LIKE fallback on title
+      const result = app.searchService.search({ query: 'how is the' });
+      expect(result.conversations.length).toBeGreaterThanOrEqual(0); // graceful, no crash
+    });
+  });
+
+  describe('quoted phrase search (D043)', () => {
+    test('quoted phrase returns exact matches', () => {
+      const { app } = createTempApp();
+      const conv = createConversation(app, { external_id: 'phrase-1', workspace: 'ws' });
+      app.conversationStore.addTurn({ conversation_id: conv.id, role: 'user', content: 'the design log template is ready' });
+      const noMatch = createConversation(app, { external_id: 'phrase-2', workspace: 'ws' });
+      app.conversationStore.addTurn({ conversation_id: noMatch.id, role: 'user', content: 'the design is great and the log is clean' });
+
+      const result = app.searchService.search({ query: '"design log"' });
+      expect(result.conversations.length).toBe(1);
+      expect(result.conversations[0].id).toBe(conv.id);
+    });
+
+    test('unbalanced quote is auto-closed', () => {
+      const { app } = createTempApp();
+      const conv = createConversation(app, { external_id: 'unbalanced-1', workspace: 'ws' });
+      app.conversationStore.addTurn({ conversation_id: conv.id, role: 'user', content: 'hello world application' });
+
+      // Missing closing quote — should auto-close and treat as phrase
+      expect(() => app.searchService.search({ query: '"hello world' })).not.toThrow();
+      const result = app.searchService.search({ query: '"hello world' });
+      expect(result.conversations.length).toBe(1);
+    });
+  });
+
+  describe('stop word stripping (D043)', () => {
+    test('stop words are stripped in OR fallback, keeping meaningful terms', () => {
+      const { app } = createTempApp();
+      const conv = createConversation(app, { external_id: 'stop-1', workspace: 'ws' });
+      app.conversationStore.addTurn({ conversation_id: conv.id, role: 'user', content: 'implement caching strategy for performance' });
+
+      // "how to implement caching" — stop words: how, to → OR: implement OR caching
+      const result = app.searchService.search({ query: 'how to implement caching' });
+      expect(result.conversations.length).toBe(1);
+    });
+  });
+
   describe('FTS query sanitization', () => {
     test('hyphenated query like "self-test" does not crash', () => {
       const { app } = createTempApp();

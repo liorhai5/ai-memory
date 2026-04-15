@@ -153,7 +153,7 @@ Stored at `~/.ai-memory/config.json`.
 
 Search runs across three sources, ranked in order:
 
-1. **Turn content** — FTS5 full-text search with BM25 ranking (primary)
+1. **Turn content** — FTS5 full-text search with BM25 ranking (primary). Cascades from AND to OR when AND returns few results, with automatic stop word stripping. Supports `"quoted phrases"` for exact match.
 2. **Conversation summaries** — secondary matching
 3. **Conversation titles** — secondary matching
 
