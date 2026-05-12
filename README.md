@@ -8,6 +8,8 @@ AI coding assistants have no memory. Every session starts blank — they don't k
 
 ai-memory logs every conversation and makes it searchable. It watches IDE transcript directories and imports turns automatically, supports full-text search, and lets the LLM write progressive summaries via MCP tools. It runs locally, stores everything on your machine, and works without any LLM involvement.
 
+**Background:** [Decoupling agent memory from the harness](docs/article.md) — the design rationale and architecture.
+
 ---
 
 ## Prerequisites
