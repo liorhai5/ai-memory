@@ -11,9 +11,9 @@ describe('dashboard workspace helpers', () => {
     expect(formatWorkspace(null)).toBe('global');
   });
 
-  test('formatWorkspace trims Playgrounds prefix', () => {
-    const full = '/Users/liorha/Projects/Wix/Playgrounds-ai-memory';
-    expect(formatWorkspace(full)).toBe('ai-memory');
+  test('formatWorkspace reduces a full path to the project name', () => {
+    expect(formatWorkspace('/Users/liorha/Projects/Personal/ai-memory')).toBe('ai-memory');
+    expect(formatWorkspace('ai-memory')).toBe('ai-memory');
   });
 
   test('workspaceStyle is deterministic for same workspace', () => {
