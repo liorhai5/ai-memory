@@ -31,9 +31,11 @@ export function workspaceStyle(ws: string | null): { color: string; backgroundCo
 
 export function formatWorkspace(ws: string | null): string {
   if (!ws) return 'global';
-  const idx = ws.lastIndexOf('Playgrounds-');
-  if (idx >= 0) return ws.slice(idx + 'Playgrounds-'.length);
-  return ws;
+  // Ingestion stores short names already; this only has to cope with a full
+  // path leaking through. Take the trailing segment rather than stripping a
+  // specific parent directory, which tied this to one machine's layout.
+  const seg = ws.split(/[/\\]/).filter(Boolean).pop();
+  return seg || ws;
 }
 
 export function formatDate(iso: string): string {
