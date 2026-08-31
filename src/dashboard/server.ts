@@ -25,13 +25,38 @@ function corsHeaders(): Record<string, string> {
   return {};
 }
 
-// The dashboard binds to loopback, but loopback is not a security boundary on
-// its own: an attacker's DNS name can resolve to 127.0.0.1, and the browser
-// then treats their page as same-origin (DNS rebinding). Requests must arrive
-// addressed to a loopback host.
-function hostAllowed(req: IncomingMessage): boolean {
-  const host = (req.headers.host ?? '').split(':')[0].toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' || host === '';
+/** Hostname out of a Host header, port removed. `[::1]:8485` -> `::1`.
+ *  Returns null when the header is missing or empty — HTTP/1.1 requires it,
+ *  and a request without one has nothing to check. */
+export function parseHostHeader(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const v = raw.trim().toLowerCase();
+  if (!v) return null;
+  if (v.startsWith('[')) {
+    // IPv6 literal: the address itself contains colons, so the port can only
+    // be the part after the closing bracket. Splitting on ':' would yield '['.
+    const end = v.indexOf(']');
+    return end === -1 ? null : v.slice(1, end);
+  }
+  return v.split(':')[0];
+}
+
+export function isLoopbackHost(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+/** Loopback is not a security boundary on its own: an attacker's DNS name can
+ *  resolve to 127.0.0.1, and the browser then treats their page as same-origin
+ *  (DNS rebinding). So while bound to loopback, requests must also be addressed
+ *  to a loopback name.
+ *
+ *  When the operator has deliberately bound a routable interface, they have
+ *  opted into exposure and the check is skipped — otherwise --host would be
+ *  inert, rejecting every request that reached the interface it opened. */
+export function hostAllowed(hostHeader: string | undefined, bindHost: string): boolean {
+  if (!isLoopbackHost(bindHost)) return true;
+  const host = parseHostHeader(hostHeader);
+  return host !== null && isLoopbackHost(host);
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -76,9 +101,12 @@ export interface DashboardOptions {
 
 export function startDashboard(opts: DashboardOptions): void {
   const ctx = createApp(opts.dbPath);
+  // Without an explicit host, node binds every interface (`::`), which put the
+  // full conversation history on the local network with no authentication.
+  const host = opts.host ?? '127.0.0.1';
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (!hostAllowed(req)) {
+    if (!hostAllowed(req.headers.host, host)) {
       res.writeHead(403, { 'Content-Type': 'text/plain' });
       res.end('Forbidden: dashboard is reachable on loopback only');
       return;
@@ -150,9 +178,6 @@ export function startDashboard(opts: DashboardOptions): void {
     process.exit(1);
   });
 
-  // Without an explicit host, node binds every interface (`::`), which put the
-  // full conversation history on the local network with no authentication.
-  const host = opts.host ?? '127.0.0.1';
   server.listen(opts.port, host, () => {
     const url = `http://localhost:${opts.port}`;
     console.log(`ai-memory dashboard running at ${url}`);

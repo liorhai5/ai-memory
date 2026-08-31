@@ -13,7 +13,24 @@ describe('dashboard workspace helpers', () => {
 
   test('formatWorkspace reduces a full path to the project name', () => {
     expect(formatWorkspace('/home/user/projects/ai-memory')).toBe('ai-memory');
+    expect(formatWorkspace('C:\\Users\\dev\\projects\\ai-memory')).toBe('ai-memory');
+    expect(formatWorkspace('/home/user/projects/ai-memory/')).toBe('ai-memory');
+  });
+
+  test('formatWorkspace passes a bare project name through', () => {
     expect(formatWorkspace('ai-memory')).toBe('ai-memory');
+    expect(formatWorkspace('some-project-with-dashes')).toBe('some-project-with-dashes');
+  });
+
+  test('formatWorkspace still shortens the legacy flattened project token', () => {
+    // older rows stored an absolute path with separators flattened to '-';
+    // a project name may itself contain '-', so this relies on the container
+    // marker rather than splitting
+    expect(formatWorkspace('Users-dev-Projects-Playgrounds-ai-memory')).toBe('ai-memory');
+  });
+
+  test('formatWorkspace strips the leading dashes Claude project tokens carry', () => {
+    expect(formatWorkspace('-Users-dev-code')).toBe('Users-dev-code');
   });
 
   test('workspaceStyle is deterministic for same workspace', () => {

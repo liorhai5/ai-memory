@@ -31,11 +31,20 @@ export function workspaceStyle(ws: string | null): { color: string; backgroundCo
 
 export function formatWorkspace(ws: string | null): string {
   if (!ws) return 'global';
-  // Ingestion stores short names already; this only has to cope with a full
-  // path leaking through. Take the trailing segment rather than stripping a
-  // specific parent directory, which tied this to one machine's layout.
-  const seg = ws.split(/[/\\]/).filter(Boolean).pop();
-  return seg || ws;
+  // A filesystem path: the project is the trailing segment. The previous
+  // implementation did not handle this case at all and returned the whole path.
+  if (ws.includes('/') || ws.includes('\\')) {
+    const seg = ws.split(/[/\\]/).filter(Boolean).pop();
+    if (seg) return seg;
+  }
+  // Older rows stored an IDE project token instead: an absolute path with the
+  // separators flattened to '-'. A project name can itself contain '-', so
+  // there is no generic way to split one back apart — trimming the known
+  // container prefix is a compatibility shim for that legacy data, not a
+  // description of where projects live.
+  const marker = ws.lastIndexOf('Playgrounds-');
+  if (marker >= 0) return ws.slice(marker + 'Playgrounds-'.length);
+  return ws.replace(/^-+/, '');
 }
 
 export function formatDate(iso: string): string {
