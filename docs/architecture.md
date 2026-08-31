@@ -159,7 +159,7 @@ Resolves workspace names from IDE transcript paths. Key behaviors:
 
 - `normalizeWorkspaceLabel()` — strips paths to basename, removes leading `-` prefixes from Claude folder names
 - `extractCwdFromTranscript()` — extracts working directory from JSONL transcript lines (Claude Code `row.cwd`, Codex `session_meta.payload.cwd`)
-- `probeTokenToPath()` — greedy left-to-right filesystem probe to decode IDE project tokens (e.g., `Users-liorha-Projects-ai-memory` → `/Users/liorha/Projects/ai-memory`)
+- `probeTokenToPath()` — greedy left-to-right filesystem probe to decode IDE project tokens (e.g., `Users-alice-Projects-ai-memory` → `/Users/alice/Projects/ai-memory`)
 - `resolveWorkspace()` — three-tier resolution: `cwd` from transcript (most reliable) > filesystem probe of IDE token > raw token fallback
 
 ---

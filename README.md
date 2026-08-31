@@ -1,6 +1,6 @@
 # ai-memory
 
-![License](https://img.shields.io/badge/license-ISC-blue) ![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen) ![SQLite](https://img.shields.io/badge/SQLite-%3E%3D3.35-blue)
+![License](https://img.shields.io/badge/license-MIT-blue) ![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen) ![SQLite](https://img.shields.io/badge/SQLite-%3E%3D3.35-blue)
 
 **Conversation log and retrieval for AI coding assistants.**
 
@@ -296,6 +296,10 @@ src/
 
 ---
 
-## License
+## Contributing
 
-ISC
+Issues and pull requests welcome.
+
+## Licence
+
+[MIT](LICENSE) © Lior Hai

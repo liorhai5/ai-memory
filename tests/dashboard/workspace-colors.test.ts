@@ -12,7 +12,7 @@ describe('dashboard workspace helpers', () => {
   });
 
   test('formatWorkspace reduces a full path to the project name', () => {
-    expect(formatWorkspace('/Users/liorha/Projects/Personal/ai-memory')).toBe('ai-memory');
+    expect(formatWorkspace('/home/user/projects/ai-memory')).toBe('ai-memory');
     expect(formatWorkspace('ai-memory')).toBe('ai-memory');
   });
 

@@ -3,11 +3,15 @@
   "version": "0.2.0",
   "description": "Personal, persistent, self-learning memory for AI coding assistants",
   "type": "module",
-  "license": "ISC",
+  "license": "MIT",
   "author": "Lior Hai",
   "repository": {
     "type": "git",
-    "url": "https://github.com/liorha/ai-memory"
+    "url": "git+https://github.com/liorhai5/ai-memory.git"
+  },
+  "homepage": "https://github.com/liorhai5/ai-memory#readme",
+  "bugs": {
+    "url": "https://github.com/liorhai5/ai-memory/issues"
   },
   "keywords": [
     "ai",
