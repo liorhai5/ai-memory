@@ -392,6 +392,7 @@ program
   .command('dashboard')
   .description('Start local dashboard UI')
   .option('--port <port>', 'Server port', '8485')
+  .option('--host <host>', 'Interface to bind — loopback only unless you change it', '127.0.0.1')
   .option('--no-open', "Don't open browser")
   .action(async (opts) => {
     const { startDashboard } = await import('./dashboard/server.js');
@@ -400,6 +401,7 @@ program
     const __dirname = dirname(fileURLToPath(import.meta.url));
     startDashboard({
       port: Number(opts.port),
+      host: opts.host,
       dbPath,
       open: opts.open !== false,
       staticDir: joinPath(__dirname, 'dashboard/client'),
