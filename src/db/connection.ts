@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { chmodSync } from 'node:fs';
 import { SCHEMA_SQL } from './schema.js';
 
 export function getDbPath(): string {
@@ -33,5 +34,18 @@ export function createDb(dbPath = getDbPath()): Database.Database {
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
   db.exec(SCHEMA_SQL);
+
+  // This file holds every conversation the user has had with their assistants.
+  // Left to the umask it lands at 0644 — readable by any other account on the
+  // machine. WAL mode adds two more files that carry the same content.
+  if (dbPath !== ':memory:') {
+    for (const p of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+      try {
+        chmodSync(p, 0o600);
+      } catch {
+        // -wal/-shm may not exist yet, and on some filesystems chmod is a no-op
+      }
+    }
+  }
   return db;
 }

@@ -17,12 +17,21 @@ const MIME_TYPES: Record<string, string> = {
   '.woff': 'font/woff',
 };
 
+// No CORS headers. The client is served by this same server, so it is already
+// same-origin in production, and the vite dev server proxies /rpc rather than
+// calling across origins. A wildcard Allow-Origin here meant any page the user
+// happened to visit could POST to localhost and read their whole memory back.
 function corsHeaders(): Record<string, string> {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
+  return {};
+}
+
+// The dashboard binds to loopback, but loopback is not a security boundary on
+// its own: an attacker's DNS name can resolve to 127.0.0.1, and the browser
+// then treats their page as same-origin (DNS rebinding). Requests must arrive
+// addressed to a loopback host.
+function hostAllowed(req: IncomingMessage): boolean {
+  const host = (req.headers.host ?? '').split(':')[0].toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' || host === '';
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -56,6 +65,10 @@ function serveStatic(staticDir: string, urlPath: string, res: ServerResponse): v
 
 export interface DashboardOptions {
   port: number;
+  /** Interface to bind. Defaults to loopback — this serves the full
+   *  conversation history with no authentication, so it must not be reachable
+   *  from the network unless the user explicitly asks for it. */
+  host?: string;
   dbPath: string;
   open: boolean;
   staticDir: string;
@@ -65,6 +78,12 @@ export function startDashboard(opts: DashboardOptions): void {
   const ctx = createApp(opts.dbPath);
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    if (!hostAllowed(req)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Forbidden: dashboard is reachable on loopback only');
+      return;
+    }
+
     if (req.method === 'OPTIONS') {
       res.writeHead(204, corsHeaders());
       res.end();
@@ -131,7 +150,10 @@ export function startDashboard(opts: DashboardOptions): void {
     process.exit(1);
   });
 
-  server.listen(opts.port, () => {
+  // Without an explicit host, node binds every interface (`::`), which put the
+  // full conversation history on the local network with no authentication.
+  const host = opts.host ?? '127.0.0.1';
+  server.listen(opts.port, host, () => {
     const url = `http://localhost:${opts.port}`;
     console.log(`ai-memory dashboard running at ${url}`);
 
