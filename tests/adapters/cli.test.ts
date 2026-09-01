@@ -4,8 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+// Resolve tsx from node_modules rather than going through npx: npx re-resolves
+// the binary on every call, which roughly doubled the cost of each of the 25
+// spawns below for no benefit.
+const TSX = join(
+  process.cwd(),
+  'node_modules',
+  '.bin',
+  process.platform === 'win32' ? 'tsx.cmd' : 'tsx'
+);
+
 function runCli(args: string[], env: Record<string, string>, stdin?: string) {
-  return spawnSync('npx', ['tsx', 'src/cli.ts', ...args], {
+  return spawnSync(TSX, ['src/cli.ts', ...args], {
     cwd: process.cwd(),
     env: { ...process.env, ...env },
     encoding: 'utf8',
@@ -169,7 +179,7 @@ describe('CLI commands', () => {
 // D047: project init CLI tests
 describe('CLI project init (D047)', () => {
   function runCliInCwd(args: string[], env: Record<string, string>, cwd: string) {
-    return spawnSync('npx', ['tsx', join(process.cwd(), 'src/cli.ts'), ...args], {
+    return spawnSync(TSX, [join(process.cwd(), 'src/cli.ts'), ...args], {
       cwd,
       env: { ...process.env, ...env },
       encoding: 'utf8'
