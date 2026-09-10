@@ -159,4 +159,10 @@ export async function startStdioServer(dbPath: string) {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Exit when the parent process closes its end of stdin (crash, force-quit,
+  // kill) instead of lingering as an orphan under launchd
+  process.stdin.on('end', () => {
+    process.exit(0);
+  });
 }
